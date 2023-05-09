@@ -1,0 +1,3 @@
+# Accessing & Managing Financial Data
+
+The code for this chapter is found in `fin_data.R`.

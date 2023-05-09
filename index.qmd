@@ -1,0 +1,20 @@
+# Preface {.unnumbered}
+
+This "book" is a collection of notes made as I work through Tidy Finance with R.
+
+## Data
+
+| Table                   | Chapter | Code |
+|-------------------------|:-------:|------|
+| `beta`                  |         |      |
+| `compustat`             |   3     |  `make_compustat.R`    |
+| `cpi_monthly`           |   2     | `fin_data.R`     |
+| `crsp_daily`            |   3     | `make_crsp_daily.R`     | 
+| `crsp_monthly`          |   3     | `make_crsp_monthly.R` |
+| `factors_ff_daily`      |   2     | `fin_data.R`     |
+| `factors_ff_monthly`    |   2     | `fin_data.R`     |
+| `factors_q_monthly`     |   2     | `fin_data.R`     |
+| `industries_ff_monthly` |   2     | `fin_data.R`     |
+| `macro_predictors`      |   2     | `fin_data.R`     |
+| `mergent`               |         |      |
+| `trace_enhanced`        |         |      |
