@@ -1,0 +1,22 @@
+project:
+  type: book
+  output-dir: docs
+  
+book:
+  title: "Tidy Finance with R: Some notes"
+  author: "Ian Gow"
+  date: today
+  date-format: "D MMMM YYYY"
+  
+  chapters:
+    - index.qmd
+    - chapter_1.qmd
+    - fin_data.qmd
+    - wrds.qmd
+    - references.qmd
+
+bibliography: references.bib
+
+format:
+  html:
+    theme: cosmo
