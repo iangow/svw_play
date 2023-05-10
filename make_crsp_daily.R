@@ -61,7 +61,17 @@ for (j in 1:length(permnos)) {
 
 close(progress)
 
+res <- dbSendQuery(tidy_finance, "VACUUM")
+res
+dbClearResult(res)
+dbDisconnect(tidy_finance)
+
 # DuckDB ----
+tidy_finance <- dbConnect(
+  RSQLite::SQLite(),
+  "data/tidy_finance.sqlite",
+  extended_types = TRUE)
+
 crsp_daily_db <- tbl(tidy_finance, "crsp_daily")
 
 ddb <- dbConnect(
@@ -70,4 +80,8 @@ ddb <- dbConnect(
   read_only = FALSE
 )
 
+copy_to(ddb, crsp_daily_db, "crsp_daily",
+        temporary = FALSE, overwrite = TRUE)
+
 dbDisconnect(ddb, shutdown = TRUE)
+dbDisconnect(tidy_finance)
