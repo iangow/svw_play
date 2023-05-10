@@ -6,7 +6,7 @@ This "book" is a collection of notes made as I work through Tidy Finance with R.
 
 | Table                   | Chapter | Code |
 |-------------------------|:-------:|------|
-| `beta`                  |         |      |
+| `beta`                  |   6     |  `make_betas.R`    |
 | `compustat`             |   3     |  `make_compustat.R`    |
 | `cpi_monthly`           |   2     | `fin_data.R`     |
 | `crsp_daily`            |   3     | `make_crsp_daily.R`     | 
