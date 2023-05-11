@@ -10,7 +10,7 @@ if [ -z "$(git status --porcelain)" ]; then
   git stash apply
   git commit
   git push
-  git checkout master
+  git checkout main
 else
   # Uncommitted changes
   echo "You have uncommitted changes."
