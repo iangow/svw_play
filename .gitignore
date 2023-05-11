@@ -3,5 +3,7 @@
 .RData
 .Ruserdata
 .quarto
-
 /.quarto/
+data
+docs
+macro_predictors.xlsx
