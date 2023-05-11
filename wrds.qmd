@@ -14,15 +14,6 @@ library(scales)
 ```
 
 ```{r}
-#| eval: false
-tidy_finance <- dbConnect(
-  RSQLite::SQLite(),
-  "data/tidy_finance.sqlite",
-  extended_types = TRUE
-)
-```
-
-```{r}
 #| eval: true
 tidy_finance <- dbConnect(
   duckdb::duckdb(),
@@ -66,7 +57,7 @@ crsp_monthly |>
   mutate(permno_be = if_else(!is.na(be), permno, NA)) |>
   group_by(exchange, year) |>
   summarize(
-    share = n_distinct(permno_be) / n_distinct(permno),
+    share = 1.0 * n_distinct(permno_be) / n_distinct(permno),
     .groups = "drop") |>
   ggplot(aes(
     x = year, 
