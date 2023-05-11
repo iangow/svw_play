@@ -13,6 +13,7 @@ book:
     - chapter_1.qmd
     - fin_data.qmd
     - wrds.qmd
+    - betas.qmd
     - references.qmd
 
 bibliography: references.bib

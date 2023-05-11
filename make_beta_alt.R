@@ -2,16 +2,16 @@ library(tidyverse)
 library(DBI)
 library(dbplyr)
 
-ddb <- dbConnect(
-  RSQLite::SQLite(),
-  "data/tidy_finance.sqlite",
-  extended_types = TRUE)
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = FALSE)
 
-crsp_monthly <- tbl(ddb, "crsp_monthly") 
-crsp_daily <- tbl(ddb, "crsp_daily") 
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly") 
+crsp_daily <- tbl(tidy_finance, "crsp_daily") 
 
-factors_ff_monthly <- tbl(ddb, "factors_ff_monthly")
-factors_ff_daily <- tbl(ddb, "factors_ff_daily")
+factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly")
+factors_ff_daily <- tbl(tidy_finance, "factors_ff_daily")
 
 window <- "OVER (PARTITION BY permno ORDER BY month
            RANGE BETWEEN INTERVAL 59 MONTHS PRECEDING
@@ -54,7 +54,7 @@ beta_daily <-
   select(permno, month, beta_daily) %>%
   distinct()
 
-dbExecute(ddb, "DROP TABLE IF EXISTS beta_alt")
+dbExecute(tidy_finance, "DROP TABLE IF EXISTS beta_alt")
 
 beta_alt <- 
   beta_monthly |>
@@ -62,4 +62,4 @@ beta_alt <-
   arrange(permno, month) %>%
   compute(name = "beta_alt", temporary = FALSE)
 
-dbDisconnect(ddb, shutdown = TRUE)
+dbDisconnect(tidy_finance, shutdown = TRUE)

@@ -1,0 +1,172 @@
+# Beta Estimation 
+
+## Code to create beta
+
+Instead of the code in the book, I used the following code to create `beta` (here renamed `beta_alt`).
+The code from the book (see [here](https://gist.github.com/iangow/0e35eeee6e5a65190ee7e748bcc27c25)) takes 12 minutes and maxes out at about 37GB of RAM. 
+The code below takes 25 seconds and peaks at about 7GB.
+
+The code below is perhaps uglier than it needs to be, but is designed to get as close as possible to the results of the code in the book.
+Note that I get some differences with `beta_monthly`, but the same values for `beta_daily`.
+
+```{r}
+#| file: make_beta_alt.R
+#| eval: false
+#| include: true
+```
+
+## Analysis of betas
+
+Having created the table using the code below, I now include the analyses presented in the book, but using the database as the primary engine.
+Rendering this document takes less than six seconds.^[Note that code above that creates `beta_alt` is not run with this document.]
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(DBI)
+library(scales)
+library(dbplyr)
+```
+
+```{r}
+#| eval: true
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE)
+```
+
+```{r}
+beta <- tbl(tidy_finance, "beta_alt")
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly")
+```
+
+```{r}
+examples <- tribble(
+  ~permno, ~company,
+  14593, "Apple",
+  10107, "Microsoft",
+  93436, "Tesla",
+  17778, "Berkshire Hathaway"
+) |>
+  copy_inline(tidy_finance, df = _)
+```
+
+```{r}
+beta_examples <- 
+  beta |>
+  inner_join(examples, by = "permno") |>
+  select(permno, company, month, beta_monthly) 
+
+beta_examples |>
+  filter(!is.na(beta_monthly)) |>
+  ggplot(aes(
+    x = month, 
+    y = beta_monthly, 
+    color = company,
+    linetype = company)) +
+  geom_line() +
+  labs(
+    x = NULL, y = NULL, color = NULL, linetype = NULL,
+    title = "Monthly beta estimates for example stocks using 5 years of data"
+  )
+```
+
+```{r}
+crsp_monthly |>
+  left_join(beta, join_by(permno, month)) |>
+  filter(!is.na(beta_monthly)) |>
+  group_by(industry, permno) |>
+  summarize(beta = mean(beta_monthly, na.rm = TRUE), 
+            .groups = "drop") |>
+  ggplot(aes(x = reorder(industry, beta, FUN = median), y = beta)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(
+    x = NULL, y = NULL,
+    title = "Firm-specific beta distributions by industry"
+  )
+```
+```{r}
+beta |>
+  filter(!is.na(beta_monthly)) |>
+  group_by(month) |>
+  mutate(quantile = ntile(-beta_monthly, 10) * 10) |>
+  group_by(month, quantile) |>
+  summarize(x = min(beta_monthly, na.rm = TRUE), .groups = "drop") |>
+  filter(quantile != 100) |>
+  ggplot(aes(
+    x = month, 
+    y = x, 
+    color = as_factor(quantile),
+    linetype = as_factor(quantile)
+    )) +
+  geom_line() +
+  labs(
+    x = NULL, y = NULL, color = NULL, linetype = NULL,
+    title = "Monthly deciles of estimated betas",
+  )
+```
+
+```{r}
+beta |>
+  inner_join(examples, by = "permno") |>
+  pivot_longer(cols = c(beta_monthly, beta_daily)) |>
+  filter(!is.na(value)) |>
+  ggplot(aes(
+    x = month, 
+    y = value, 
+    color = name, 
+    linetype = name
+    )) +
+  geom_line() +
+  facet_wrap(~ company, ncol = 1) +
+  labs(
+    x = NULL, y = NULL, color = NULL, linetype = NULL, 
+    title = "Comparison of beta estimates using monthly and daily data"
+  )
+```
+
+```{r}
+beta_long <- 
+  crsp_monthly |>
+  left_join(beta, by = c("permno", "month")) |>
+  select(month, beta_monthly, beta_daily) |>
+  pivot_longer(cols = c(beta_monthly, beta_daily))
+
+beta_long |>
+  group_by(month, name) |>
+  summarize(share = sum(as.double(!is.na(value)), na.rm = TRUE) / n(),
+            .groups = "drop") |>
+  ggplot(aes(
+    x = month, 
+    y = share, 
+    color = name,
+    linetype = name
+    )) +
+  geom_line() +
+  scale_y_continuous(labels = percent) +
+  labs(
+    x = NULL, y = NULL, color = NULL, linetype = NULL,
+    title = "End-of-month share of securities with beta estimates"
+  ) +
+  coord_cartesian(ylim = c(0, 1))
+```
+
+```{r}
+beta_long |>
+  select(name, value) |>
+  filter(!is.na(value)) |>
+  group_by(name) |>
+  summarize(
+    mean = mean(value),
+    sd = sd(value),
+    min = min(value),
+    q05 = quantile(value, 0.05),
+    q50 = quantile(value, 0.50),
+    q95 = quantile(value, 0.95),
+    max = max(value),
+    n = n()
+  ) |>
+  collect()
+```
