@@ -1,0 +1,38 @@
+# Univariate Portfolio Sorts
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(DBI)
+library(scales)
+library(lmtest)
+library(sandwich)
+```
+
+```{r}
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE)
+```
+
+```{r}
+crsp_monthly <- 
+  tbl(tidy_finance, "crsp_monthly") |>
+  select(permno, month, ret_excess, mktcap_lag)
+
+factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly")
+
+beta <- tbl(tidy_finance, "beta_alt")
+```
+
+```{r}
+beta_lag <- 
+  beta |>
+  mutate(month = month %m+% months(1)) |>
+  select(permno, month, beta_lag = beta_monthly) |>
+  filter(!is.na(beta_lag))
+
+data_for_sorts <- crsp_monthly |>
+  inner_join(beta_lag, by = c("permno", "month"))
+```

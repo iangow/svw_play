@@ -49,10 +49,11 @@ beta_daily <-
   left_join(factors_ff_daily, by = "date") |>
   select(permno, month, ret_excess, mkt_excess) |>
   filter(!is.na(ret_excess)) |>
-  mutate(beta_daily = beta_sql, n = n_sql) %>%
-  filter(n >= 50) %>%
-  select(permno, month, beta_daily) %>%
-  distinct()
+  mutate(beta_daily = beta_sql, n = n_sql) |>
+  filter(n >= 50) |>
+  select(permno, month, beta_daily) |>
+  distinct() |>
+  compute()
 
 dbExecute(tidy_finance, "DROP TABLE IF EXISTS beta_alt")
 

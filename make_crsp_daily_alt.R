@@ -36,3 +36,5 @@ crsp_daily <-
   ) |>
   select(permno, date, month, ret_excess) |>
   copy_to(tidy_finance, df = _, name = "crsp_daily", temporary = FALSE)
+
+dbDisconnect(tidy_finance, shutdown = TRUE)
