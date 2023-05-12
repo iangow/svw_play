@@ -1,12 +1,6 @@
 # WRDS, CRSP, and Compustat
 
 ```{r}
-#| eval: false
-#| include: false
-use_duckdb <- TRUE
-```
-
-```{r}
 #| warning: false
 library(tidyverse)
 library(DBI)
