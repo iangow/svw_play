@@ -9,6 +9,11 @@ end_date <- ymd("2021-12-31")
 # WRDS ----
 wrds <- dbConnect(RPostgres::Postgres())
 
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = FALSE)
+
 msf_db <- tbl(wrds, in_schema("crsp", "msf"))
 msenames_db <- tbl(wrds, in_schema("crsp", "msenames"))
 msedelist_db <- tbl(wrds, in_schema("crsp", "msedelist"))
@@ -115,28 +120,17 @@ crsp_monthly <- crsp_monthly |>
   ) |>
   select(-ret_adj, -rf)
 
-crsp_monthly <- crsp_monthly |>
-  drop_na(ret_excess, mktcap, mktcap_lag)
+crsp_monthly <- 
+  crsp_monthly |>
+  filter(!is.na(ret_excess), !is.na(mktcap), !is.na(mktcap_lag))
 
-# SQLite -----
+# DuckDB -----
+
 dbWriteTable(tidy_finance,
              "crsp_monthly",
              value = crsp_monthly,
-             overwrite = TRUE
-)
+             overwrite = TRUE)
 
-res <- dbSendQuery(tidy_finance, "VACUUM")
-dbClearResult(res)
-dbDisconnect(tidy_finance)
-
-# DuckDB -----
-tidy_finance <- dbConnect(
-  duckdb::duckdb(),
-  "data/tidy_finance.duckdb",
-  read_only = FALSE)
-
-res <- dbSendQuery(tidy_finance, "VACUUM")
-dbClearResult(res)
 dbDisconnect(tidy_finance, shutdown = TRUE)
 
 # RDS ----

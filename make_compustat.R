@@ -51,23 +51,6 @@ compustat <-
   filter(datadate == max(datadate)) |>
   ungroup()
 
-# SQLite ----
-tidy_finance <- dbConnect(
-  RSQLite::SQLite(),
-  "data/tidy_finance.sqlite",
-  extended_types = TRUE)
-
-dbWriteTable(tidy_finance,
-             "compustat",
-             value = compustat,
-             overwrite = TRUE
-)
-
-res <- dbSendQuery(tidy_finance, "VACUUM")
-res
-dbClearResult(res)
-dbDisconnect(tidy_finance)
-
 # DuckDB ----
 tidy_finance <- dbConnect(
   duckdb::duckdb(),

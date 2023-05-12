@@ -3,6 +3,8 @@ library(DBI)
 library(dbplyr)
 
 # WRDS ----
+wrds <- dbConnect(RPostgres::Postgres(), bigint = "integer")
+
 msf_db <- tbl(wrds, in_schema("crsp", "msf"))
 msenames_db <- tbl(wrds, in_schema("crsp", "msenames"))
 msedelist_db <- tbl(wrds, in_schema("crsp", "msedelist"))
@@ -37,34 +39,23 @@ crsp_monthly <-
     dlret, # Delisting return
     dlstcd # Delisting code
   ) |>
-  collect() |>
-  mutate(
-    month = ymd(month),
-    shrout = shrout * 1000
-  )
-
-crsp_monthly <- crsp_monthly |>
-  mutate(
-    mktcap = abs(shrout * altprc) / 1000000,
-    mktcap = na_if(mktcap, 0)
-  )
+  mutate(month = as.Date(month),
+         shrout = shrout * 1000,
+         mktcap = abs(shrout * altprc) / 1000000,
+         mktcap = na_if(mktcap, 0))
 
 mktcap_lag <- crsp_monthly |>
-  mutate(month = month %m+% months(1)) |>
+  mutate(month = month + months(1)) |>
   select(permno, month, mktcap_lag = mktcap)
 
-crsp_monthly <- crsp_monthly |>
-  left_join(mktcap_lag, by = c("permno", "month"))
-
-crsp_monthly <- crsp_monthly |>
+crsp_monthly <- 
+  crsp_monthly |>
+  left_join(mktcap_lag, by = c("permno", "month")) |>
   mutate(exchange = case_when(
     exchcd %in% c(1, 31) ~ "NYSE",
     exchcd %in% c(2, 32) ~ "AMEX",
     exchcd %in% c(3, 33) ~ "NASDAQ",
-    TRUE ~ "Other"
-  ))
-
-crsp_monthly <- crsp_monthly |>
+    TRUE ~ "Other")) |>
   mutate(industry = case_when(
     siccd >= 1 & siccd <= 999 ~ "Agriculture",
     siccd >= 1000 & siccd <= 1499 ~ "Mining",
@@ -78,9 +69,7 @@ crsp_monthly <- crsp_monthly |>
     siccd >= 7000 & siccd <= 8999 ~ "Services",
     siccd >= 9000 & siccd <= 9999 ~ "Public",
     TRUE ~ "Missing"
-  ))
-
-crsp_monthly <- crsp_monthly |>
+  )) |>
   mutate(ret_adj = case_when(
     is.na(dlstcd) ~ ret,
     !is.na(dlstcd) & !is.na(dlret) ~ dlret,
@@ -91,21 +80,23 @@ crsp_monthly <- crsp_monthly |>
   )) |>
   select(-c(dlret, dlstcd))
 
-factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly") |>
-  collect()
+factors_ff_monthly <-
+  tbl(tidy_finance, "factors_ff_monthly") |>
+  collect() |>
+  copy_inline(wrds, df = _)
 
-crsp_monthly <- crsp_monthly |>
+crsp_monthly <-
+  crsp_monthly |>
   left_join(factors_ff_monthly |> select(month, rf),
-            by = "month"
-  ) |>
+            by = "month") |>
   mutate(
     ret_excess = ret_adj - rf,
     ret_excess = pmax(ret_excess, -1)
   ) |>
-  select(-ret_adj, -rf)
-
-crsp_monthly <- crsp_monthly |>
-  drop_na(ret_excess, mktcap, mktcap_lag)
+  select(-ret_adj, -rf) |>
+  filter(!is.na(ret_excess),
+         !is.na(mktcap),
+         !is.na(mktcap_lag))
 
 ccmxpf_linktable <- 
   ccmxpf_linktable_db |>
@@ -113,12 +104,11 @@ ccmxpf_linktable <-
            linkprim %in% c("P", "C") &
            usedflag == 1) |>
   select(permno = lpermno, gvkey, linkdt, linkenddt) |>
-  collect() |>
-  mutate(linkenddt = replace_na(linkenddt, today()))
+  mutate(linkenddt = coalesce(linkenddt, today()))
 
 ccm_links <- 
   crsp_monthly |>
-  inner_join(ccmxpf_linktable, by = "permno", relationship = "many-to-many") |>
+  inner_join(ccmxpf_linktable, by = "permno") |>
   filter(!is.na(gvkey) & (date >= linkdt & date <= linkenddt)) |>
   select(permno, gvkey, date)
 
@@ -126,19 +116,6 @@ crsp_monthly <-
   crsp_monthly |>
   left_join(ccm_links, by = c("permno", "date"))
 
-# SQLite ----
-tidy_finance <- dbConnect(
-  RSQLite::SQLite(),
-  "data/tidy_finance.sqlite",
-  extended_types = TRUE)
-
-dbWriteTable(tidy_finance,
-             "crsp_monthly",
-             value = crsp_monthly,
-             overwrite = TRUE)
-
-# RDS ----
-write_rds(crsp_monthly, "data/crsp_monthly.rds")
 
 # DuckDB ----
 tidy_finance <- dbConnect(
@@ -146,9 +123,10 @@ tidy_finance <- dbConnect(
   "data/tidy_finance.duckdb",
   read_only = FALSE)
 
-dbWriteTable(tidy_finance,
-             "crsp_monthly",
-             value = crsp_monthly,
-             overwrite = TRUE)
+copy_to(tidy_finance,
+        df = crsp_monthly,
+        name = "crsp_monthly",
+        temporary = FALSE, 
+        overwrite = TRUE)
 
 dbDisconnect(tidy_finance, shutdown = TRUE)
