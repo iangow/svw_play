@@ -28,6 +28,7 @@ library(scales)
 library(dbplyr)
 ```
 
+
 ```{r}
 #| eval: true
 tidy_finance <- dbConnect(
@@ -154,6 +155,7 @@ beta_long |>
 ```
 
 ```{r}
+#| warning: false
 beta_long |>
   select(name, value) |>
   filter(!is.na(value)) |>
