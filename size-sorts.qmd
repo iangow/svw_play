@@ -215,6 +215,11 @@ p_hacking_results <-
 p_hacking_results
 ```
 ```{r}
+smb_mean <- 
+  factors_ff_monthly |> 
+  summarize(mean(smb, na.rm = TRUE)) |>
+  pull()
+
 p_hacking_results |>
   filter(!is.na(Premium)) |>
   ggplot(aes(x = Premium)) +
@@ -223,7 +228,7 @@ p_hacking_results |>
     x = NULL, y = NULL,
     title = "Distribution of size premiums for different sorting choices"
   ) +
-  geom_vline(aes(xintercept = mean(factors_ff_monthly$smb)),
+  geom_vline(aes(xintercept = smb_mean),
     linetype = "dashed"
   ) +
   scale_x_continuous(labels = percent)
