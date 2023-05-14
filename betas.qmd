@@ -172,3 +172,7 @@ beta_long |>
   ) |>
   collect()
 ```
+
+```{r}
+dbDisconnect(tidy_finance, shutdown = TRUE)
+```
