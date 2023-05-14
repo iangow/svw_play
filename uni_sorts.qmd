@@ -8,6 +8,7 @@ library(scales)
 library(lmtest)
 library(sandwich)
 ```
+## Data Preparation
 
 ```{r}
 tidy_finance <- dbConnect(
@@ -16,23 +17,218 @@ tidy_finance <- dbConnect(
   read_only = TRUE)
 ```
 
+There are three tables used for this chapter.
+I defer the `select()` used with `crsp_monthly` in the book, as I find it more elegant to have a code chunk that just links to the database tables.
+
 ```{r}
-crsp_monthly <- 
-  tbl(tidy_finance, "crsp_monthly") |>
-  select(permno, month, ret_excess, mktcap_lag)
-
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly") 
 factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly")
-
 beta <- tbl(tidy_finance, "beta_alt")
 ```
+## Sorting by Market Beta
 
 ```{r}
 beta_lag <- 
   beta |>
-  mutate(month = month %m+% months(1)) |>
+  mutate(month = month + months(1)) |>
   select(permno, month, beta_lag = beta_monthly) |>
   filter(!is.na(beta_lag))
 
-data_for_sorts <- crsp_monthly |>
+data_for_sorts <- 
+  crsp_monthly |>
+  select(permno, month, ret_excess, mktcap_lag) |>
   inner_join(beta_lag, by = c("permno", "month"))
+```
+
+```{r}
+breakpoints <-
+  data_for_sorts |>
+  group_by(month) |>
+  summarize(breakpoint = median(beta_lag, na.rm = TRUE),
+            .groups = "drop")
+
+beta_portfolios <- 
+  data_for_sorts |>
+  inner_join(breakpoints, by = "month") |>
+  mutate(
+    portfolio = case_when(
+      beta_lag <= breakpoint ~ "low",
+      beta_lag > breakpoint ~ "high")) |>
+  filter(!is.na(ret_excess)) |>
+  group_by(month, portfolio) |>
+  summarize(ret = sum(ret_excess * mktcap_lag, na.rm = TRUE)/
+              sum(mktcap_lag, na.rm = TRUE), 
+            .groups = "drop")
+```
+
+## Performance Evaluation
+
+```{r}
+beta_longshort <- 
+  beta_portfolios |>
+  pivot_wider(id_cols = month, names_from = portfolio, values_from = ret) |>
+  mutate(long_short = high - low) |>
+  collect()
+```
+
+```{r}
+model_fit <- lm(long_short ~ 1, data = beta_longshort)
+coeftest(model_fit, vcov = NeweyWest)
+```
+## Functional Programming for Portfolio Sorts
+
+Using the `ntile()` function, the `assign_portfolio()` function can be reduced to a one-liner.
+As such there is no reason to have a function, but I have retained this to illustrate the use of the curly-curly operator as shown in the book.
+
+```{r}
+assign_portfolio <- function(data, var, n_portfolios) {
+  mutate(data, portfolio = ntile({{ var }}, n_portfolios))
+}
+```
+
+Using a "data-frame-in-data-frame-out" function results in tidier code.
+Because the data are still in the database, we use our home-brewed alternative to `weighted.mean()` and defer the conversion of `portfolio` to a factor until we `collect()` the data below.
+
+```{r}
+beta_portfolios <- 
+  data_for_sorts |>
+  group_by(month) |>
+  assign_portfolio(var = beta_lag, 10) |>
+  group_by(portfolio, month) |>
+  summarize(ret = sum(ret_excess * mktcap_lag, na.rm = TRUE)/
+                    sum(mktcap_lag, na.rm = TRUE), 
+            .groups = "drop")
+```
+
+
+## More Performance Evaluation
+
+Unlike the book, I use the `coef()` function here for a small amount of convenience.
+
+```{r}
+beta_portfolios_summary <- 
+  beta_portfolios |>
+  left_join(factors_ff_monthly, by = "month") |>
+  group_by(portfolio) |>
+  collect() %>%
+  mutate(portfolio = as.factor(portfolio)) |>
+  summarize(
+    alpha = coef(lm(ret ~ 1 + mkt_excess))[1],
+    beta = coef(lm(ret ~ 1 + mkt_excess))[2],
+    ret = mean(ret)
+  )
+```
+
+```{r}
+#| label: fig-701
+#| fig-cap: "Portfolios are sorted into deciles each month based on their estimated CAPM beta. The bar charts indicate the CAPM alpha of the resulting portfolio returns during the entire CRSP period." 
+#| fig-alt: "Title: CAPM alphas of beta-sorted portfolios. The figure shows bar charts of alphas of beta-sorted portfolios with the decile portfolio on the horizontal axis and the corresponding CAPM alpha on the vertical axis. Alphas for low beta portfolios are positive, while high beta portfolios show negative alphas."
+beta_portfolios_summary |>
+  ggplot(aes(x = portfolio, y = alpha, fill = portfolio)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "CAPM alphas of beta-sorted portfolios",
+    x = "Portfolio",
+    y = "CAPM alpha",
+    fill = "Portfolio"
+  ) +
+  scale_y_continuous(labels = percent) +
+  theme(legend.position = "None")
+```
+
+## The Security Market Line and Beta Portfolios
+
+Again I use the `coef()` function and I also extract the calculation stored in `mean_mkt_excess` upfront.
+
+```{r}
+#| label: fig-702
+#| fig-cap: "Excess returns are computed as CAPM alphas of the beta-sorted portfolios. The horizontal axis indicates the CAPM beta of the resulting beta-sorted portfolio return time series. The dashed line indicates the slope coefficient of a linear regression of excess returns on portfolio betas."
+#| fig-alt: "Title: Average portfolio excess returns and average beta estimates. The figure shows a scatter plot of the average excess returns per beta portfolio with average beta estimates per portfolio on the horizontal axis and average excess returns on the vertical axis. An increasing solid line indicates the security market line. A dashed increasing line with lower slope than the security market line indicates that the CAPM prediction is not valid for CRSP data."
+
+sml_capm <- coef(lm(ret ~ 1 + beta, data = beta_portfolios_summary))
+
+mean_mkt_excess <- 
+  factors_ff_monthly |>
+  summarize(mean(mkt_excess, na.rm = TRUE)) |>
+  pull()
+
+beta_portfolios_summary |>
+  filter(!is.na(ret), !is.na(beta)) |>
+  ggplot(aes(
+    x = beta, 
+    y = ret, 
+    color = portfolio
+  )) +
+  geom_point() +
+  geom_abline(
+    intercept = 0,
+    slope = mean_mkt_excess,
+    linetype = "solid"
+  ) +
+  geom_abline(
+    intercept = sml_capm[1],
+    slope = sml_capm[2],
+    linetype = "dashed"
+  ) +
+  scale_y_continuous(
+    labels = percent,
+    limit = c(0, mean_mkt_excess * 2)
+  ) +
+  scale_x_continuous(limits = c(0, 2)) +
+  labs(
+    x = "Beta", y = "Excess return", color = "Portfolio",
+    title = "Average portfolio excess returns and average beta estimates"
+  )
+```
+The `ungroup()` shown in the book is not needed (because we used `.groups = "drop")` in the previous step.
+
+```{r}
+beta_longshort <- 
+  beta_portfolios |>
+  mutate(portfolio = case_when(
+    portfolio == max(as.numeric(portfolio)) ~ "high",
+    portfolio == min(as.numeric(portfolio)) ~ "low"
+  )) |>
+  filter(portfolio %in% c("low", "high")) |>
+  pivot_wider(id_cols = month, names_from = portfolio, values_from = ret) |>
+  mutate(long_short = high - low) |>
+  left_join(factors_ff_monthly, by = "month") %>%
+  collect()
+```
+
+```{r}
+coeftest(lm(long_short ~ 1, data = beta_longshort),
+         vcov = NeweyWest)
+```
+```{r}
+coeftest(lm(long_short ~ 1 + mkt_excess, data = beta_longshort),
+         vcov = NeweyWest)
+```
+
+We have already applied `collect()` to `beta_longshort`, so we can use R functions here.
+If `beta_longshort` were a remote data frame, not that `dbplyr` does not translate `prod()` for us, but we could use the `product()` aggregate from DuckDB.
+
+```{r}
+beta_longshort |>
+  group_by(year = year(month)) |>
+  summarize(
+    low = prod(1 + low),
+    high = prod(1 + high),
+    long_short = prod(1 + long_short)
+  ) |>
+  pivot_longer(cols = -year) |>
+  ggplot(aes(x = year, y = 1 - value, fill = name)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~name, ncol = 1) +
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = percent) +
+  labs(
+    title = "Annual returns of beta portfolios",
+    x = NULL, y = NULL
+  )
+```
+
+
+```{r}
+dbDisconnect(tidy_finance, shutdown = TRUE)
 ```
