@@ -1,5 +1,4 @@
-clean_enhanced_trace <- function(cusips, 
-                                 connection, 
+clean_enhanced_trace <- function(connection, 
                                  start_date = as.Date("2002-01-01"), 
                                  end_date = today()) {
 
@@ -31,7 +30,6 @@ clean_enhanced_trace <- function(cusips,
   # Main file
   trace_all <- tbl(connection, 
                    in_schema("trace", "trace_enhanced")) |> 
-    filter(cusip_id %in% cusips) |>
     filter(trd_exctn_dt >= start_date & trd_exctn_dt <= end_date) |> 
     select(cusip_id, msg_seq_nb, orig_msg_seq_nb,
            entrd_vol_qt, rptd_pr, yld_pt, rpt_side_cd, cntra_mp_id,
@@ -205,35 +203,15 @@ clean_enhanced_trace <- function(cusips,
 tidy_finance <- dbConnect(
   duckdb::duckdb(),
   "data/tidy_finance.duckdb",
-  read_only = FALSE
-)
+  read_only = FALSE)
 
-mergent_cusips <- 
-  tbl(tidy_finance, "mergent") |>
-  pull(complete_cusip)
+trace_enhanced_all <- clean_enhanced_trace(wrds)
 
-mergent_parts <- split(
-  mergent_cusips,
-  rep(1:100, 
-      length.out = length(mergent_cusips))
-)
-
-for (j in 1:length(mergent_parts)) {
-  trace_enhanced <- clean_enhanced_trace(
-    cusips = mergent_parts[[j]],
-    connection = wrds,
-    start_date = ymd("2014-01-01"),
-    end_date = ymd("2016-11-30")
-  )
-  print(paste("Starting", j))
-  dbWriteTable(
-    conn = tidy_finance,
-    name = "trace_enhanced",
-    value = trace_enhanced,
-    overwrite = ifelse(j == 1, TRUE, FALSE),
-    append = ifelse(j != 1, TRUE, FALSE))
-  print(paste("Finishing", j))
-}
+dbWriteTable(
+  conn = tidy_finance,
+  name = "trace_enhanced_all",
+  value = trace_enhanced_all,
+  overwrite = TRUE)
 
 dbDisconnect(wrds)
 dbDisconnect(tidy_finance, shutdown = TRUE)
