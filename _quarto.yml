@@ -14,6 +14,9 @@ book:
     - fin_data.qmd
     - wrds.qmd
     - betas.qmd
+    - uni-sorts.qmd
+    - size-sorts.qmd
+    - size-sorts-orig.qmd
     - references.qmd
 
 bibliography: references.bib

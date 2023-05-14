@@ -1,0 +1,234 @@
+# Size Sorts and p-Hacking: Database version
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(DBI)
+library(scales)
+library(sandwich)
+library(lmtest)
+library(furrr)
+library(rlang)
+```
+
+
+## Data Preparation
+
+```{r}
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE)
+
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly")
+factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly") 
+```
+
+## Size Distribution
+
+```{r}
+#| warning: false
+monthly_quantiles <-
+  crsp_monthly |>
+  group_by(month) |>
+  summarize(
+    total_market_cap = sum(mktcap, na.rm = TRUE),
+    q_top01 = quantile_cont(mktcap, 0.99),
+    q_top05 = quantile_cont(mktcap, 0.95),
+    q_top10 = quantile_cont(mktcap, 0.90),
+    q_top25 = quantile_cont(mktcap, 0.75),
+    .groups = "drop")
+
+crsp_monthly |>
+  inner_join(monthly_quantiles, by = "month") |>
+  mutate(
+    top01 = mktcap >= q_top01,
+    top05 = mktcap >= q_top05,
+    top10 = mktcap >= q_top10,
+    top25 = mktcap >= q_top25,
+    .groups = "drop") |>
+  group_by(month) |>
+  summarize(
+    `Largest 1% of stocks` = sum(mktcap[top01]/total_market_cap),
+    `Largest 5% of stocks` = sum(mktcap[top05]/total_market_cap),
+    `Largest 10% of stocks` = sum(mktcap[top10]/total_market_cap),
+    `Largest 25% of stocks` = sum(mktcap[top25]/total_market_cap),
+    .groups = "drop") |>
+  pivot_longer(cols = -month) |>
+  collect() |>
+  mutate(name = factor(name, levels = c(
+    "Largest 1% of stocks", "Largest 5% of stocks",
+    "Largest 10% of stocks", "Largest 25% of stocks"
+  ))) |>
+  ggplot(aes(
+    x = month, 
+    y = value, 
+    color = name,
+    linetype = name)) +
+  geom_line() +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(
+    x = NULL, y = NULL, color = NULL, linetype = NULL,
+    title = "Percentage of total market capitalization in largest stocks")
+```
+
+```{r}
+crsp_monthly |>
+  group_by(month, exchange) |>
+  summarize(mktcap = sum(mktcap),
+            .groups = "drop_last") |>
+  mutate(share = mktcap / sum(mktcap)) |>
+  ggplot(aes(
+    x = month, 
+    y = share, 
+    fill = exchange, 
+    color = exchange)) +
+  geom_area(
+    position = "stack",
+    stat = "identity",
+    alpha = 0.5
+  ) +
+  geom_line(position = "stack") +
+  scale_y_continuous(labels = percent) +
+  labs(
+    x = NULL, y = NULL, fill = NULL, color = NULL,
+    title = "Share of total market capitalization per listing exchange"
+  )
+```
+```{r}
+create_summary <- function(data, column_name) {
+  data |>
+    mutate(value = {{ column_name }}) |>
+    summarize(
+      mean = mean(value),
+      sd = sd(value),
+      min = min(value),
+      q05 = quantile_cont(value, 0.05),
+      q50 = quantile_cont(value, 0.50),
+      q95 = quantile_cont(value, 0.95),
+      max = max(value),
+      n = n()
+    )
+}
+
+crsp_monthly |>
+  filter(month == max(month)) |>
+  group_by(exchange) |>
+  create_summary(mktcap) |>
+  arrange(exchange) |>
+  union_all(crsp_monthly |>
+            filter(month == max(month)) |>
+            create_summary(mktcap) |>
+            mutate(exchange = "Overall")) |>
+  collect()
+```
+
+```{r}
+assign_portfolio <- function(data, n_portfolios, exchanges) {
+  data |>
+    filter(exchange %in% exchanges) |>
+    mutate(portfolio = ntile(mktcap_lag, n_portfolios))
+}
+```
+
+
+```{r}
+compute_portfolio_returns <- function(data = crsp_monthly,
+                                      n_portfolios = 10,
+                                      exchanges = c("NYSE", "NASDAQ", "AMEX"),
+                                      value_weighted = TRUE) {
+  
+  exchanges_str <- str_flatten(exchanges, ", ")
+  
+  data |>
+    group_by(month) |>
+    assign_portfolio(n_portfolios, exchanges) |>
+    group_by(month, portfolio) |>
+    filter(!is.na(ret), !is.na(mktcap_lag)) |>
+    mutate(weight = if_else(value_weighted, mktcap_lag, 1)) |>
+    summarize(
+       ret = sum(ret_excess * weight, na.rm = TRUE)/
+                    sum(weight, na.rm = TRUE),
+      .groups = "drop") |>
+    mutate(portfolio = case_when(portfolio == min(portfolio) ~ "min",
+                                 portfolio == max(portfolio) ~ "max",
+                                 TRUE ~ "other")) |>
+    filter(portfolio %in% c("min", "max")) |>
+    pivot_wider(names_from = portfolio, values_from = ret) |>
+    mutate(size_premium = min - max) |>
+    summarize(Premium = mean(size_premium)) |>
+    mutate(Exchanges = exchanges_str) |>
+    select(Exchanges, Premium) |>
+    collect()
+}
+```
+
+```{r}
+ret_all <- 
+  crsp_monthly |>
+  compute_portfolio_returns(n_portfolios = 2,
+                            exchanges = c("NYSE", "NASDAQ", "AMEX"),
+                            value_weighted = TRUE) 
+
+ret_nyse <- 
+  crsp_monthly |>
+  compute_portfolio_returns(n_portfolios = 2,
+                            exchanges = "NYSE",
+                            value_weighted = TRUE)
+
+bind_rows(ret_all, ret_nyse)
+```
+
+```{r}
+p_hacking_setup <- 
+  expand_grid(
+    n_portfolios = c(2, 5, 10),
+    exchanges = list("NYSE", c("NYSE", "NASDAQ", "AMEX")),
+    value_weighted = c(TRUE, FALSE),
+    data = parse_exprs(
+     'crsp_monthly; 
+      crsp_monthly |> filter(industry != "Finance");
+      crsp_monthly |> filter(month < "1990-06-01");
+      crsp_monthly |> filter(month >="1990-06-01")'))
+```
+
+```{r}
+p_hacking_setup <- 
+  p_hacking_setup |>
+  mutate(size_premium = 
+           pmap(.l = list(data, n_portfolios, exchanges, value_weighted),
+                .f = ~ compute_portfolio_returns(
+                  data = eval_tidy(..1),
+                  n_portfolios = ..2,
+                  exchanges = ..3,
+                  value_weighted = ..4)))
+```
+
+
+```{r}
+p_hacking_results <- 
+  p_hacking_setup |>
+  mutate(data = map_chr(data, deparse)) |>
+  unnest(size_premium) |>
+  arrange(desc(Premium))
+
+p_hacking_results
+```
+```{r}
+p_hacking_results |>
+  filter(!is.na(Premium)) |>
+  ggplot(aes(x = Premium)) +
+  geom_histogram(bins = nrow(p_hacking_results)) +
+  labs(
+    x = NULL, y = NULL,
+    title = "Distribution of size premiums for different sorting choices"
+  ) +
+  geom_vline(aes(xintercept = mean(factors_ff_monthly$smb)),
+    linetype = "dashed"
+  ) +
+  scale_x_continuous(labels = percent)
+```
+
+```{r}
+dbDisconnect(tidy_finance, shutdown = TRUE)
+```
