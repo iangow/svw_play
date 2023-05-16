@@ -1,0 +1,112 @@
+# Value and Bivariate Sorts
+
+```{r}
+library(tidyverse)
+library(DBI)
+library(scales)
+library(lmtest)
+library(sandwich)
+```
+
+```{r}
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE)
+
+drop_na <- function(df) {
+  df |>
+    filter(if_all(everything(), ~ !is.na(.)))
+}
+
+
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly")
+
+# crsp_monthly <- 
+crsp_monthly |>
+  select(permno, gvkey, month, ret_excess,
+         mktcap, mktcap_lag, exchange) |>
+  drop_na()
+```
+
+```{r}
+compustat <- tbl(tidy_finance, "compustat") 
+
+be <- 
+  compustat |>
+  select(gvkey, datadate, be) |>
+  drop_na() |>
+  mutate(month = floor_date(datadate, "month"))
+```
+
+## Book-to-Market Ratio
+
+
+```{r}
+me <- 
+  crsp_monthly |>
+  mutate(sorting_date = month + months(1)) |>
+  select(permno, sorting_date, me = mktcap)
+
+bm <- 
+  be |>
+  inner_join(crsp_monthly |>
+    select(month, permno, gvkey, mktcap), by = c("gvkey", "month")) |>
+  mutate(
+    bm = be / mktcap,
+    sorting_date = month + months(6),
+    comp_date = sorting_date
+  ) |>
+  select(permno, gvkey, sorting_date, comp_date, bm)
+
+data_for_sorts <- 
+  crsp_monthly |>
+  left_join(bm, by = c("permno",
+    "gvkey",
+    "month" = "sorting_date"
+  )) |>
+  left_join(me, by = c("permno", "month" = "sorting_date")) |>
+  select(
+    permno, gvkey, month, ret_excess,
+    mktcap_lag, me, bm, exchange, comp_date
+  ) |>
+  group_by(permno, gvkey) |>
+  dbplyr::window_order(permno, gvkey, month) |>
+  fill(bm, comp_date) |>
+  filter(comp_date > month - months(12)) |>
+  select(-comp_date) |>
+  ungroup() |> 
+  drop_na() |>
+  compute()
+```
+
+```{r}
+assign_portfolio <- function(data, var, n_portfolios, exchanges) {
+  data |>
+    filter(exchange %in% exchanges) |>
+    mutate(portfolio = ntile({{ var }}, n_portfolios))
+}
+```
+
+## Independent Sorts
+
+```{r}
+value_portfolios <- 
+  data_for_sorts |>
+  group_by(month) |>
+  assign_portfolio(
+    var = bm,
+    n_portfolios = 5,
+    exchanges = c("NYSE")) |>
+  rename(portfolio_bm = portfolio) |>
+  assign_portfolio(
+    var = me,
+    n_portfolios = 5,
+    exchanges = c("NYSE")) |>
+  rename(portfolio_me = portfolio) |>
+  group_by(month, portfolio_me, portfolio_bm) |>
+  summarize(
+    ret = sum(ret_excess * mktcap_lag) / sum(mktcap_lag),
+    .groups = "drop")
+```
+

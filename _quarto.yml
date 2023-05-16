@@ -17,6 +17,7 @@ book:
     - uni-sorts.qmd
     - size-sorts.qmd
     - size-sorts-orig.qmd
+    - value-bivariate-sorts.qmd
     - references.qmd
 
 bibliography: references.bib
