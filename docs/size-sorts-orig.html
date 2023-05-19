@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.2.269">
+<meta name="generator" content="quarto-1.1.189">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -93,7 +93,7 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <script src="site_libs/quarto-search/fuse.min.js"></script>
 <script src="site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="./">
-<link href="./references.html" rel="next">
+<link href="./value-bivariate-sorts.html" rel="next">
 <link href="./size-sorts.html" rel="prev">
 <script src="site_libs/quarto-html/quarto.js"></script>
 <script src="site_libs/quarto-html/popper.min.js"></script>
@@ -198,6 +198,11 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 </li>
         <li class="sidebar-item">
   <div class="sidebar-item-container"> 
+  <a href="./value-bivariate-sorts.html" class="sidebar-item-text sidebar-link"><span class="chapter-number">8</span>&nbsp; <span class="chapter-title">Value and Bivariate Sorts</span></a>
+  </div>
+</li>
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
   <a href="./references.html" class="sidebar-item-text sidebar-link">References</a>
   </div>
 </li>
@@ -228,7 +233,6 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <div class="quarto-title-meta">
 
     
-  
     
   </div>
   
@@ -431,8 +435,8 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <pre><code># A tibble: 2 × 2
   Exchanges           Premium
   &lt;chr&gt;                 &lt;dbl&gt;
-1 NYSE, NASDAQ &amp; AMEX -0.0320
-2 NYSE                 0.108 </code></pre>
+1 NYSE, NASDAQ &amp; AMEX  0.0975
+2 NYSE                 0.166 </code></pre>
 </div>
 </div>
 <div class="cell">
@@ -477,16 +481,16 @@ code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warni
 <pre><code># A tibble: 48 × 5
    n_portfolios exchanges value_weighted data                       size_premium
           &lt;dbl&gt; &lt;list&gt;    &lt;lgl&gt;          &lt;chr&gt;                             &lt;dbl&gt;
- 1           10 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, mon…      0.0164 
- 2           10 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, ind…      0.0134 
- 3           10 &lt;chr [3]&gt; FALSE          "crsp_monthly"                  0.0116 
- 4           10 &lt;chr [3]&gt; TRUE           "filter(crsp_monthly, mon…      0.00782
- 5            5 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, mon…      0.00740
- 6           10 &lt;chr [3]&gt; TRUE           "filter(crsp_monthly, ind…      0.00729
- 7           10 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, mon…      0.00667
- 8           10 &lt;chr [3]&gt; TRUE           "crsp_monthly"                  0.00612
- 9            5 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, ind…      0.00568
-10            5 &lt;chr [3]&gt; FALSE          "crsp_monthly"                  0.00472
+ 1           10 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, mon…      0.0186 
+ 2           10 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, ind…      0.0182 
+ 3           10 &lt;chr [3]&gt; FALSE          "crsp_monthly"                  0.0163 
+ 4           10 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, mon…      0.0139 
+ 5           10 &lt;chr [3]&gt; TRUE           "filter(crsp_monthly, ind…      0.0115 
+ 6           10 &lt;chr [3]&gt; TRUE           "filter(crsp_monthly, mon…      0.0109 
+ 7           10 &lt;chr [3]&gt; TRUE           "crsp_monthly"                  0.0103 
+ 8           10 &lt;chr [3]&gt; TRUE           "filter(crsp_monthly, mon…      0.00969
+ 9            5 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, ind…      0.00924
+10            5 &lt;chr [3]&gt; FALSE          "filter(crsp_monthly, mon…      0.00894
 # ℹ 38 more rows</code></pre>
 </div>
 </div>
@@ -555,24 +559,7 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
     button.classList.add('code-copy-button-checked');
     var currentTitle = button.getAttribute("title");
     button.setAttribute("title", "Copied!");
-    let tooltip;
-    if (window.bootstrap) {
-      button.setAttribute("data-bs-toggle", "tooltip");
-      button.setAttribute("data-bs-placement", "left");
-      button.setAttribute("data-bs-title", "Copied!");
-      tooltip = new bootstrap.Tooltip(button, 
-        { trigger: "manual", 
-          customClass: "code-copy-button-tooltip",
-          offset: [0, -8]});
-      tooltip.show();    
-    }
     setTimeout(function() {
-      if (tooltip) {
-        tooltip.hide();
-        button.removeAttribute("data-bs-title");
-        button.removeAttribute("data-bs-toggle");
-        button.removeAttribute("data-bs-placement");
-      }
       button.setAttribute("title", currentTitle);
       button.classList.remove('code-copy-button-checked');
     }, 1000);
@@ -608,42 +595,24 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
       return note.innerHTML;
     });
   }
-  const findCites = (el) => {
-    const parentEl = el.parentElement;
-    if (parentEl) {
-      const cites = parentEl.dataset.cites;
-      if (cites) {
-        return {
-          el,
-          cites: cites.split(' ')
-        };
-      } else {
-        return findCites(el.parentElement)
-      }
-    } else {
-      return undefined;
-    }
-  };
   var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
   for (var i=0; i<bibliorefs.length; i++) {
     const ref = bibliorefs[i];
-    const citeInfo = findCites(ref);
-    if (citeInfo) {
-      tippyHover(citeInfo.el, function() {
-        var popup = window.document.createElement('div');
-        citeInfo.cites.forEach(function(cite) {
-          var citeDiv = window.document.createElement('div');
-          citeDiv.classList.add('hanging-indent');
-          citeDiv.classList.add('csl-entry');
-          var biblioDiv = window.document.getElementById('ref-' + cite);
-          if (biblioDiv) {
-            citeDiv.innerHTML = biblioDiv.innerHTML;
-          }
-          popup.appendChild(citeDiv);
-        });
-        return popup.innerHTML;
+    const cites = ref.parentNode.getAttribute('data-cites').split(' ');
+    tippyHover(ref, function() {
+      var popup = window.document.createElement('div');
+      cites.forEach(function(cite) {
+        var citeDiv = window.document.createElement('div');
+        citeDiv.classList.add('hanging-indent');
+        citeDiv.classList.add('csl-entry');
+        var biblioDiv = window.document.getElementById('ref-' + cite);
+        if (biblioDiv) {
+          citeDiv.innerHTML = biblioDiv.innerHTML;
+        }
+        popup.appendChild(citeDiv);
       });
-    }
+      return popup.innerHTML;
+    });
   }
 });
 </script>
@@ -654,8 +623,8 @@ window.document.addEventListener("DOMContentLoaded", function (event) {
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="./references.html" class="pagination-link">
-        <span class="nav-page-text">References</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="./value-bivariate-sorts.html" class="pagination-link">
+        <span class="nav-page-text"><span class="chapter-number">8</span>&nbsp; <span class="chapter-title">Value and Bivariate Sorts</span></span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>
