@@ -124,10 +124,38 @@ crsp_monthly |>
 ```
 
 ```{r}
-assign_portfolio <- function(data, n_portfolios, exchanges) {
+get_breaks <- function(data, n_portfolios, exchanges) {
+  
+  ports <- 0:n_portfolios
+  ports_sql <- sql(paste0("[", paste(ports, collapse = ", "), "]"))
+  breaks <- seq(0, 1, 1/n_portfolios)
+  breaks_sql <- sql(paste0("[", paste(breaks, collapse = ", "), "]"))
+  
   data |>
     filter(exchange %in% exchanges) |>
-    mutate(portfolio = ntile(mktcap_lag, n_portfolios))
+    group_by(month) |>
+    summarize(portfolio = ports_sql,
+              breaks = quantile_cont(mktcap_lag, breaks_sql)) %>%
+    mutate(portfolio = unnest(portfolio),
+           breaks = unnest(breaks)) |>
+    group_by(month) |>
+    dbplyr::window_order(portfolio) |>
+    mutate(port_max = if_else(portfolio == n_portfolios, Inf, breaks),
+           port_min = if_else(portfolio == 1, -Inf, lag(breaks))) |>
+    filter(portfolio > 0) |>
+    select(month, portfolio, port_max, port_min) |>
+    compute()
+}
+
+assign_portfolio <- function(data, n_portfolios, exchanges) {
+  breaks <- get_breaks(data, n_portfolios, exchanges)
+  
+    data |>
+    inner_join(breaks, 
+               join_by(month,
+                       mktcap_lag >= port_min,
+                       mktcap_lag < port_max)) |>
+    select(-port_min, -port_max) 
 }
 ```
 
@@ -139,7 +167,7 @@ compute_portfolio_returns <- function(data = crsp_monthly,
                                       value_weighted = TRUE) {
   
   exchanges_str <- str_flatten(exchanges, ", ")
-  
+
   data |>
     group_by(month) |>
     assign_portfolio(n_portfolios, exchanges) |>
@@ -156,9 +184,9 @@ compute_portfolio_returns <- function(data = crsp_monthly,
     filter(portfolio %in% c("min", "max")) |>
     pivot_wider(names_from = portfolio, values_from = ret) |>
     mutate(size_premium = min - max) |>
-    summarize(Premium = mean(size_premium)) |>
-    mutate(Exchanges = exchanges_str) |>
-    select(Exchanges, Premium) |>
+    summarize(size_premium = mean(size_premium)) |>
+    mutate(exchanges = exchanges_str) |>
+    select(exchanges, size_premium) |>
     collect()
 }
 ```
@@ -208,9 +236,10 @@ p_hacking_setup <-
 ```{r}
 p_hacking_results <- 
   p_hacking_setup |>
+  select(-exchanges) |>
   mutate(data = map_chr(data, deparse)) |>
   unnest(size_premium) |>
-  arrange(desc(Premium))
+  arrange(desc(size_premium))
 
 p_hacking_results
 ```
@@ -221,8 +250,8 @@ smb_mean <-
   pull()
 
 p_hacking_results |>
-  filter(!is.na(Premium)) |>
-  ggplot(aes(x = Premium)) +
+  filter(!is.na(size_premium)) |>
+  ggplot(aes(x = size_premium)) +
   geom_histogram(bins = nrow(p_hacking_results)) +
   labs(
     x = NULL, y = NULL,
