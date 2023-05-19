@@ -32,7 +32,7 @@ clean_enhanced_trace <- function(cusips,
   # Main file
   trace_all <- tbl(connection, 
                    in_schema("trace", "trace_enhanced")) |> 
-    filter(cusip_id %in% cusips) |>
+    semi_join(mergent_cusips, by = "cusip_id") |>
     filter(trd_exctn_dt >= start_date & trd_exctn_dt <= end_date) |> 
     select(cusip_id, msg_seq_nb, orig_msg_seq_nb,
            entrd_vol_qt, rptd_pr, yld_pt, rpt_side_cd, cntra_mp_id,
@@ -42,58 +42,78 @@ clean_enhanced_trace <- function(cusips,
   
   # Enhanced Trace: Post 06-02-2012 -----------------------------------------
   # Trades (trc_st = T) and correction (trc_st = R)
-  trace_post_TR <- trace_all |> 
+  print("Creating trace_post_TR ...")
+  trace_post_TR <- 
+    trace_all |> 
     filter((trc_st == "T" | trc_st == "R"),
            trd_rpt_dt >= as.Date("2012-02-06"))
   
-  # Cancelations (trc_st = X) and correction cancelations (trc_st = C)
-  trace_post_XC <- trace_all |>
+  # Cancellations (trc_st = X) and correction cancellations (trc_st = C)
+  print("Creating trace_post_XC ...")
+  trace_post_XC <- 
+    trace_all |>
     filter((trc_st == "X" | trc_st == "C"),
-           trd_rpt_dt >= as.Date("2012-02-06"))
+           trd_rpt_dt >= as.Date("2012-02-06")) |>
+    compute()
   
   # Cleaning corrected and cancelled trades
-  trace_post_TR <- trace_post_TR |>
+  print("Filtering trace_post_TR ...")
+  trace_post_TR <- 
+    trace_post_TR |>
     anti_join(trace_post_XC,
               by = c("cusip_id", "msg_seq_nb", "entrd_vol_qt", 
                      "rptd_pr", "rpt_side_cd", "cntra_mp_id", 
-                     "trd_exctn_dt", "trd_exctn_tm"))
+                     "trd_exctn_dt", "trd_exctn_tm")) |>
+    compute()
   
   # Reversals (trc_st = Y)
-  trace_post_Y <- trace_all |>
+  print("Creating trace_post_Y ...")
+  trace_post_Y <- 
+    trace_all |>
     filter(trc_st == "Y",
-           trd_rpt_dt >= as.Date("2012-02-06"))
+           trd_rpt_dt >= as.Date("2012-02-06")) |>
+    compute()
   
-  # Clean reversals
-  ## match the orig_msg_seq_nb of the Y-message to 
   ## the msg_seq_nb of the main message
-  trace_post <- trace_post_TR |>
+  print("Creating trace_post ...")
+  trace_post <- 
+    trace_post_TR |>
     anti_join(trace_post_Y,
               by = c("cusip_id", "msg_seq_nb" = "orig_msg_seq_nb", 
                      "entrd_vol_qt", "rptd_pr", "rpt_side_cd", 
-                     "cntra_mp_id", "trd_exctn_dt", "trd_exctn_tm"))
-  
+                     "cntra_mp_id", "trd_exctn_dt", "trd_exctn_tm")) |>
+    compute()
   
   # Enhanced TRACE: Pre 06-02-2012 ------------------------------------------
   # Cancelations (trc_st = C)
-  trace_pre_C <- trace_all |>
+  print("Creating trace_pre_C ...")
+  trace_pre_C <- 
+    trace_all |>
     filter(trc_st == "C",
-           trd_rpt_dt < as.Date("2012-02-06"))
+           trd_rpt_dt < as.Date("2012-02-06")) |>
+    compute()
   
   # Trades w/o cancelations
   ## match the orig_msg_seq_nb of the C-message 
   ## to the msg_seq_nb of the main message
-  trace_pre_T <- trace_all |>
+  print("Creating trace_pre_T ...")
+  trace_pre_T <- 
+    trace_all |>
     filter(trc_st == "T",
            trd_rpt_dt < as.Date("2012-02-06")) |>
     anti_join(trace_pre_C, 
               by = c("cusip_id", "msg_seq_nb" = "orig_msg_seq_nb", 
                      "entrd_vol_qt", "rptd_pr", "rpt_side_cd", 
-                     "cntra_mp_id", "trd_exctn_dt", "trd_exctn_tm"))
+                     "cntra_mp_id", "trd_exctn_dt", "trd_exctn_tm")) |>
+    compute()
   
   # Corrections (trc_st = W) - W can also correct a previous W
-  trace_pre_W <- trace_all |>
+  print("Creating trace_pre_W ...")
+  trace_pre_W <- 
+    trace_all |>
     filter(trc_st == "W",
-           trd_rpt_dt < as.Date("2012-02-06"))
+           trd_rpt_dt < as.Date("2012-02-06")) |>
+    compute()
   
   # Implement corrections in a loop
   ## Correction control
@@ -102,24 +122,29 @@ clean_enhanced_trace <- function(cusips,
   
   ## Correction loop
   while(correction_control > 0) {
+    cat("nrow(trace_pre_W):", correction_control, "\n")
+    
     # Corrections that correct some msg
     trace_pre_W_correcting <- trace_pre_W |>
       semi_join(trace_pre_T, 
                 by = c("cusip_id", "trd_exctn_dt",
-                       "orig_msg_seq_nb" = "msg_seq_nb"))
+                       "orig_msg_seq_nb" = "msg_seq_nb")) |>
+      compute()
     
     # Corrections that do not correct some msg
     trace_pre_W <- trace_pre_W |>
       anti_join(trace_pre_T, 
                 by = c("cusip_id", "trd_exctn_dt",
-                       "orig_msg_seq_nb" = "msg_seq_nb"))
+                       "orig_msg_seq_nb" = "msg_seq_nb")) |>
+      compute()
     
     # Delete msgs that are corrected and add correction msgs
     trace_pre_T <- trace_pre_T |>
       anti_join(trace_pre_W_correcting, 
                 by = c("cusip_id", "trd_exctn_dt",
                        "msg_seq_nb" = "orig_msg_seq_nb")) |>
-      union_all(trace_pre_W_correcting) 
+      union_all(trace_pre_W_correcting) |>
+      compute()
     
     # Escape if no corrections remain or they cannot be matched
     correction_control <- nrow(trace_pre_W)
@@ -200,16 +225,14 @@ clean_enhanced_trace <- function(cusips,
   # Return
   return(trace_final |> 
            arrange(cusip_id, trd_exctn_dt, trd_exctn_tm) %>%
-           collect())
+           compute(name = "trace_all", temporary = FALSE))
 }
 
 wrds <- dbConnect(
   RPostgres::Postgres(),
-  host = "wrds-pgdata.wharton.upenn.edu",
-  dbname = "wrds",
-  port = 9737,
-  sslmode = "require",
   bigint = "integer")
+
+dbExecute(wrds, "SET work_mem = '8GB'")
 
 tidy_finance <- dbConnect(
   duckdb::duckdb(),
@@ -219,8 +242,10 @@ tidy_finance <- dbConnect(
 
 mergent_cusips <- 
   tbl(tidy_finance, "mergent") |>
-  pull(complete_cusip)
-
+  select(cusip_id = complete_cusip) |>
+  copy_to(wrds, df = _) |>
+  compute(name = "mergent_cusips")
+  
 trace_enhanced_all <- 
   clean_enhanced_trace(cusips = mergent_cusips, connection = wrds)
 
