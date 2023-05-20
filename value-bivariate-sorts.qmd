@@ -104,12 +104,12 @@ get_breaks <- function(data, var, n_portfolios, exchanges) {
 assign_portfolio <- function(data, var, n_portfolios, exchanges) {
   breaks <- get_breaks(data, {{ var }}, n_portfolios, exchanges)
   
-  groups <- group_vars(data)
-  groups_join <- paste(lapply(groups, 
-                              function(x) paste(x, "==", x)), collapse = ", ")
+  group_vars <- group_vars(data) 
+  
   data |>
     inner_join(breaks, 
-               join_by(!!groups_join, {{ var }} >= port_min,
+               join_by(!!!group_vars, 
+                       {{ var }} >= port_min,
                        {{ var }} < port_max)) |>
     select(-port_min, -port_max) |>
     compute()
@@ -139,6 +139,7 @@ value_portfolios <-
 ```
 
 ```{r}
+#| warning: false
 value_premium <- 
   value_portfolios |>
   group_by(month, portfolio_bm) |>
@@ -183,6 +184,7 @@ value_portfolios <-
 ```
 
 ```{r}
+#| warning: false
 value_premium <- 
   value_portfolios |>
   group_by(month, portfolio_bm) |>
