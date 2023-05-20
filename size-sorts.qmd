@@ -11,7 +11,7 @@ library(furrr)
 library(rlang)
 ```
 
-
+  
 ## Data Preparation
 
 ```{r}
@@ -33,10 +33,10 @@ monthly_quantiles <-
   group_by(month) |>
   summarize(
     total_market_cap = sum(mktcap, na.rm = TRUE),
-    q_top01 = quantile_cont(mktcap, 0.99),
-    q_top05 = quantile_cont(mktcap, 0.95),
-    q_top10 = quantile_cont(mktcap, 0.90),
-    q_top25 = quantile_cont(mktcap, 0.75),
+    q_top01 = quantile(mktcap, 0.99),
+    q_top05 = quantile(mktcap, 0.95),
+    q_top10 = quantile(mktcap, 0.90),
+    q_top25 = quantile(mktcap, 0.75),
     .groups = "drop")
 
 crsp_monthly |>
@@ -103,9 +103,9 @@ create_summary <- function(data, column_name) {
       mean = mean(value),
       sd = sd(value),
       min = min(value),
-      q05 = quantile_cont(value, 0.05),
-      q50 = quantile_cont(value, 0.50),
-      q95 = quantile_cont(value, 0.95),
+      q05 = quantile(value, 0.05),
+      q50 = quantile(value, 0.50),
+      q95 = quantile(value, 0.95),
       max = max(value),
       n = n()
     )
