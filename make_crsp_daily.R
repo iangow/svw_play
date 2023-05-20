@@ -29,35 +29,37 @@ progress <- txtProgressBar(
   style = 3
 )
 
-for (j in 1:length(permnos)) {
+system.time({
+  for (j in 1:length(permnos)) {
   permno_sub <- permnos[j]
-  crsp_daily_sub <- dsf_db |>
-    filter(permno == permno_sub &
-             date >= start_date & date <= end_date) |>
-    select(permno, date, ret) |>
-    collect() |>
-    drop_na()
-  
-  if (nrow(crsp_daily_sub) > 0) {
-    crsp_daily_sub <- crsp_daily_sub |>
-      mutate(month = floor_date(date, "month")) |>
-      left_join(factors_ff_daily |>
-                  select(date, rf), by = "date") |>
-      mutate(
-        ret_excess = ret - rf,
-        ret_excess = pmax(ret_excess, -1)
-      ) |>
-      select(permno, date, month, ret_excess)
+    crsp_daily_sub <- dsf_db |>
+      filter(permno == permno_sub &
+               date >= start_date & date <= end_date) |>
+      select(permno, date, ret) |>
+      collect() |>
+      drop_na()
     
-    dbWriteTable(tidy_finance,
-                 "crsp_daily",
-                 value = crsp_daily_sub,
-                 overwrite = ifelse(j == 1, TRUE, FALSE),
-                 append = ifelse(j != 1, TRUE, FALSE)
-    )
+    if (nrow(crsp_daily_sub) > 0) {
+      crsp_daily_sub <- crsp_daily_sub |>
+        mutate(month = floor_date(date, "month")) |>
+        left_join(factors_ff_daily |>
+                    select(date, rf), by = "date") |>
+        mutate(
+          ret_excess = ret - rf,
+          ret_excess = pmax(ret_excess, -1)
+        ) |>
+        select(permno, date, month, ret_excess)
+      
+      dbWriteTable(tidy_finance,
+                   "crsp_daily",
+                   value = crsp_daily_sub,
+                   overwrite = ifelse(j == 1, TRUE, FALSE),
+                   append = ifelse(j != 1, TRUE, FALSE)
+      )
+    }
+    setTxtProgressBar(progress, j)
   }
-  setTxtProgressBar(progress, j)
-}
+})
 
 close(progress)
 

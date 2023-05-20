@@ -2,28 +2,35 @@ library(tidyverse)
 library(DBI)
 library(dbplyr)
 
-Sys.setenv(PGHOST = "wrds-pgdata.wharton.upenn.edu",
-           PGPORT = 9737L,
-           PGUSER = "iangow",
-           PGDATABASE = "wrds")
-
-
 start_date <- ymd("1960-01-01")
 end_date <- ymd("2021-12-31")
-
-wrds <- dbConnect(RPostgres::Postgres(), bigint = "integer")
 
 tidy_finance <- dbConnect(
   duckdb::duckdb(),
   "data/tidy_finance.duckdb",
   read_only = FALSE)
 
-dsf_db <- tbl(wrds, in_schema("crsp", "dsf"))
+# dsf_db <- tbl(wrds, in_schema("crsp", "dsf"))
+#wrds <- dbConnect(RPostgres::Postgres(), bigint = "integer")
+
+dbExecute(tidy_finance, "LOAD postgres_scanner")
+dbExecute(tidy_finance, "SET threads TO 3")
+
+wrds_string <- paste0("dbname=wrds user=iangow host=wrds-pgdata.wharton.upenn.edu",
+                     " port=9737 sslmode=require")
+
+#wrds_string <- paste0("dbname=igow user=igow host=iangow.me",
+#                      " port=54320")
+#wrds_string <- ''
+schema <- 'crsp_a_stock'
+# schema <- 'crsp'
+dsf_db <- tbl(tidy_finance, 
+              sql(paste0("(SELECT * FROM postgres_scan_pushdown('",
+                    wrds_string,"', '", schema,"', 'dsf'))")))
+dsf_db
 
 factors_ff_daily <- 
-  tbl(tidy_finance, "factors_ff_daily") |>
-  collect() |>
-  copy_inline(wrds, df = _)
+  tbl(tidy_finance, "factors_ff_daily") 
 
 rs <- dbExecute(tidy_finance, "DROP TABLE IF EXISTS crsp_daily")
 
@@ -42,7 +49,7 @@ system.time({
       ret_excess = pmax(ret_excess, -1, na.rm = TRUE)
     ) |>
     select(permno, date, month, ret_excess) |>
-    copy_to(tidy_finance, df = _, name = "crsp_daily", temporary = FALSE)
+    compute(name = "crsp_daily", temporary = FALSE)
 })
 
 dbDisconnect(tidy_finance, shutdown = TRUE)
