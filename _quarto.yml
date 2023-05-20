@@ -13,11 +13,13 @@ book:
     - chapter_1.qmd
     - fin_data.qmd
     - wrds.qmd
+    - other-data.qmd
     - betas.qmd
     - uni-sorts.qmd
     - size-sorts.qmd
     - size-sorts-orig.qmd
     - value-bivariate-sorts.qmd
+    - value-bivariate-sorts-orig.qmd
     - references.qmd
 
 bibliography: references.bib

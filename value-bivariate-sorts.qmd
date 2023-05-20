@@ -1,6 +1,7 @@
-# Value and Bivariate Sorts
+# Value and Bivariate Sorts: Database version
 
 ```{r}
+#| warning: false
 library(tidyverse)
 library(DBI)
 library(scales)
@@ -19,11 +20,9 @@ drop_na <- function(df) {
     filter(if_all(everything(), ~ !is.na(.)))
 }
 
-
-crsp_monthly <- tbl(tidy_finance, "crsp_monthly")
-
 # crsp_monthly <- 
-crsp_monthly |>
+crsp_monthly <- 
+  tbl(tidy_finance, "crsp_monthly") |>
   select(permno, gvkey, month, ret_excess,
          mktcap, mktcap_lag, exchange) |>
   drop_na()
@@ -81,17 +80,46 @@ data_for_sorts <-
 ```
 
 ```{r}
-assign_portfolio <- function(data, var, n_portfolios, exchanges) {
+get_breaks <- function(data, var, n_portfolios, exchanges) {
+  
+  ports <- 0:n_portfolios
+  ports_sql <- sql(paste0("[", paste(ports, collapse = ", "), "]"))
+  breaks <- seq(0, 1, 1/n_portfolios)
+  breaks_sql <- sql(paste0("[", paste(breaks, collapse = ", "), "]"))
+  
   data |>
     filter(exchange %in% exchanges) |>
-    mutate(portfolio = ntile({{ var }}, n_portfolios))
+    summarize(portfolio = ports_sql,
+              breaks = quantile_cont({{ var }}, breaks_sql),
+              .groups = "keep") %>%
+    mutate(portfolio = unnest(portfolio),
+           breaks = unnest(breaks)) |>
+    dbplyr::window_order(portfolio) |>
+    mutate(port_max = if_else(portfolio == n_portfolios, Inf, breaks),
+           port_min = if_else(portfolio == 1, -Inf, lag(breaks))) |>
+    filter(portfolio > 0) |>
+    select(group_cols(), portfolio, port_max, port_min)
+}
+
+assign_portfolio <- function(data, var, n_portfolios, exchanges) {
+  breaks <- get_breaks(data, {{ var }}, n_portfolios, exchanges)
+  
+  groups <- group_vars(data)
+  groups_join <- paste(lapply(groups, 
+                              function(x) paste(x, "==", x)), collapse = ", ")
+  data |>
+    inner_join(breaks, 
+               join_by(!!groups_join, {{ var }} >= port_min,
+                       {{ var }} < port_max)) |>
+    select(-port_min, -port_max) |>
+    compute()
 }
 ```
 
 ## Independent Sorts
 
 ```{r}
-value_portfolios <- 
+value_portfolios <-
   data_for_sorts |>
   group_by(month) |>
   assign_portfolio(
@@ -110,3 +138,67 @@ value_portfolios <-
     .groups = "drop")
 ```
 
+```{r}
+value_premium <- 
+  value_portfolios |>
+  group_by(month, portfolio_bm) |>
+  summarize(ret = mean(ret), .groups = "drop_last") |>
+  mutate(portfolio_bm =
+           case_when(portfolio_bm == min(portfolio_bm) ~ "min",
+                     portfolio_bm == max(portfolio_bm) ~ "max",
+                     TRUE ~ "other")) |>
+  filter(portfolio_bm %in% c("min", "max")) |>
+  pivot_wider(names_from = portfolio_bm, values_from = ret) |>
+  mutate(value_premium = max - min) |>
+  summarize(value_premium = mean(value_premium))
+```
+
+```{r}
+value_premium |>
+  summarize(mean(value_premium, na.rm = TRUE)) |>
+  pull() * 100
+```
+
+## Dependent Sorts
+
+```{r}
+value_portfolios <-
+  data_for_sorts |>
+  group_by(month) |>
+  assign_portfolio(
+    var = me,
+    n_portfolios = 5,
+    exchanges = c("NYSE")) |>
+  rename(portfolio_me = portfolio) |>
+  group_by(month, portfolio_me) |>
+  assign_portfolio(
+    var = bm,
+    n_portfolios = 5,
+    exchanges = c("NYSE")) |>
+  rename(portfolio_bm = portfolio) |>
+  group_by(month, portfolio_me, portfolio_bm) |>
+  summarize(
+    ret = sum(ret_excess * mktcap_lag) / sum(mktcap_lag),
+    .groups = "drop")
+```
+
+```{r}
+value_premium <- 
+  value_portfolios |>
+  group_by(month, portfolio_bm) |>
+  summarize(ret = mean(ret), .groups = "drop_last") |>
+  mutate(portfolio_bm =
+           case_when(portfolio_bm == min(portfolio_bm) ~ "min",
+                     portfolio_bm == max(portfolio_bm) ~ "max",
+                     TRUE ~ "other")) |>
+  filter(portfolio_bm %in% c("min", "max")) |>
+  pivot_wider(names_from = portfolio_bm, values_from = ret) |>
+  mutate(value_premium = max - min) |>
+  summarize(value_premium = mean(value_premium))
+```
+
+```{r}
+value_premium |>
+  summarize(mean(value_premium, na.rm = TRUE)) |>
+  pull() * 100
+```

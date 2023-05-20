@@ -1,0 +1,181 @@
+# Value and Bivariate Sorts: Original version
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(DBI)
+library(scales)
+library(lmtest)
+library(sandwich)
+```
+
+```{r}
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE)
+
+crsp_monthly <- tbl(tidy_finance, "crsp_monthly") |>
+  collect()
+
+crsp_monthly <- crsp_monthly |>
+  select(
+    permno, gvkey, month, ret_excess,
+    mktcap, mktcap_lag, exchange
+  ) |>
+  drop_na()
+```
+
+```{r}
+compustat <- tbl(tidy_finance, "compustat") |>
+  collect()
+
+be <- compustat |>
+  select(gvkey, datadate, be) |>
+  drop_na() |>
+  mutate(month = floor_date(ymd(datadate), "month"))
+```
+
+## Book-to-Market Ratio
+
+
+```{r}
+me <- crsp_monthly |>
+  mutate(sorting_date = month %m+% months(1)) |>
+  select(permno, sorting_date, me = mktcap)
+
+bm <- be |>
+  inner_join(crsp_monthly |>
+    select(month, permno, gvkey, mktcap), by = c("gvkey", "month")) |>
+  mutate(
+    bm = be / mktcap,
+    sorting_date = month %m+% months(6),
+    comp_date = sorting_date
+  ) |>
+  select(permno, gvkey, sorting_date, comp_date, bm)
+
+data_for_sorts <- crsp_monthly |>
+  left_join(bm, by = c("permno",
+    "gvkey",
+    "month" = "sorting_date"
+  )) |>
+  left_join(me, by = c("permno", "month" = "sorting_date")) |>
+  select(
+    permno, gvkey, month, ret_excess,
+    mktcap_lag, me, bm, exchange, comp_date
+  )
+
+data_for_sorts <- data_for_sorts |>
+  arrange(permno, gvkey, month) |>
+  group_by(permno, gvkey) |>
+  fill(bm, comp_date) |>
+  filter(comp_date > month %m-% months(12)) |>
+  select(-comp_date) |>
+  drop_na()
+```
+
+```{r}
+assign_portfolio <- function(data, 
+                             sorting_variable, 
+                             n_portfolios, 
+                             exchanges) {
+  breakpoints <- data |>
+    filter(exchange %in% exchanges) |>
+    pull({{ sorting_variable }}) |>
+    quantile(
+      probs = seq(0, 1, length.out = n_portfolios + 1),
+      na.rm = TRUE,
+      names = FALSE
+    )
+
+  assigned_portfolios <- data |>
+    mutate(portfolio = findInterval(
+      pick(everything()) |>
+        pull({{ sorting_variable }}),
+      breakpoints,
+      all.inside = TRUE
+    )) |>
+    pull(portfolio)
+  
+  return(assigned_portfolios)
+}
+```
+
+## Independent Sorts
+
+```{r}
+value_portfolios <- data_for_sorts |>
+  group_by(month) |>
+  mutate(
+    portfolio_bm = assign_portfolio(
+      data = pick(everything()),
+      sorting_variable = "bm",
+      n_portfolios = 5,
+      exchanges = c("NYSE")
+    ),
+    portfolio_me = assign_portfolio(
+      data = pick(everything()),
+      sorting_variable = "me",
+      n_portfolios = 5,
+      exchanges = c("NYSE")
+    ),
+    portfolio_combined = str_c(portfolio_bm, portfolio_me)
+  ) |>
+  group_by(month, portfolio_combined) |>
+  summarize(
+    ret = weighted.mean(ret_excess, mktcap_lag),
+    portfolio_bm = unique(portfolio_bm),
+    .groups = "drop"
+  )
+```
+
+```{r}
+value_premium <- value_portfolios |>
+  group_by(month, portfolio_bm) |>
+  summarize(ret = mean(ret), .groups = "drop_last") |>
+  summarize(value_premium = ret[portfolio_bm == max(portfolio_bm)] -
+    ret[portfolio_bm == min(portfolio_bm)])
+
+mean(value_premium$value_premium * 100)
+```
+
+## Dependent Sorts
+
+```{r}
+#| digits: 3
+value_portfolios <- data_for_sorts |>
+  group_by(month) |>
+  mutate(portfolio_me = assign_portfolio(
+    data = pick(everything()),
+    sorting_variable = "me",
+    n_portfolios = 5,
+    exchanges = c("NYSE")
+  )) |>
+  group_by(month, portfolio_me) |>
+  mutate(
+    portfolio_bm = assign_portfolio(
+      data = pick(everything()),
+      sorting_variable = "bm",
+      n_portfolios = 5,
+      exchanges = c("NYSE")
+    ),
+    portfolio_combined = str_c(portfolio_bm, portfolio_me)
+  ) |>
+  group_by(month, portfolio_combined) |>
+  summarize(
+    ret = weighted.mean(ret_excess, mktcap_lag),
+    portfolio_bm = unique(portfolio_bm),
+    .groups = "drop"
+  )
+
+value_premium <- value_portfolios |>
+  group_by(month, portfolio_bm) |>
+  summarize(ret = mean(ret), .groups = "drop_last") |>
+  summarize(value_premium = ret[portfolio_bm == max(portfolio_bm)] -
+    ret[portfolio_bm == min(portfolio_bm)])
+
+mean(value_premium$value_premium * 100)
+```
+
+
+

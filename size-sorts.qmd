@@ -133,9 +133,9 @@ get_breaks <- function(data, n_portfolios, exchanges) {
   
   data |>
     filter(exchange %in% exchanges) |>
-    group_by(month) |>
     summarize(portfolio = ports_sql,
-              breaks = quantile_cont(mktcap_lag, breaks_sql)) %>%
+              breaks = quantile_cont(mktcap_lag, breaks_sql),
+              .groups = "keep") %>%
     mutate(portfolio = unnest(portfolio),
            breaks = unnest(breaks)) |>
     group_by(month) |>
@@ -144,6 +144,7 @@ get_breaks <- function(data, n_portfolios, exchanges) {
            port_min = if_else(portfolio == 1, -Inf, lag(breaks))) |>
     filter(portfolio > 0) |>
     select(month, portfolio, port_max, port_min) |>
+    ungroup() |>
     compute()
 }
 
