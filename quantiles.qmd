@@ -1,0 +1,66 @@
+```{r}
+library(dplyr, warn.conflicts = FALSE)
+library(tidyr)
+library(DBI)
+
+db <- dbConnect(duckdb::duckdb())
+
+duckdb::duckdb_register(db, "iris", iris, overwrite = TRUE)
+
+iris <- tbl(db, "iris")
+```
+
+```{r}
+df_1 <-
+  iris |>
+  group_by(Species) %>%
+  summarize(probs = 0.25,
+            quantiles = quantile(Sepal.Length, 0.25, na.rm = TRUE),
+            .groups = "drop")
+
+df_1 |> show_query()
+
+df_1 |> collect() 
+```
+
+
+```{r}
+df_2 <-
+  iris |>
+  group_by(Species) %>%
+  summarize(probs = sql("[0.25, 0.5, 0.75]"),
+            quantiles = quantile_cont(Sepal.Length, 
+                                      sql("[0.25, 0.5, 0.75]"))) 
+
+df_2 |> show_query()
+df_2 |> 
+  collect() |>
+  unnest(cols = c(probs, quantiles))
+```
+
+```{sql}
+#| connection: db
+WITH nested AS (
+  SELECT
+    Species,
+    [0.25, 0.5, 0.75] AS probs,
+    PERCENTILE_CONT([0.25, 0.5, 0.75]) WITHIN GROUP (ORDER BY "Sepal.Length") AS quantiles
+  FROM iris
+  GROUP BY Species)
+  
+SELECT Species, UNNEST(probs) AS prob, UNNEST(quantiles) AS quantile
+FROM nested
+```
+```{sql}
+#| connection: db
+WITH nested AS (
+  SELECT
+    Species,
+    [0.25, 0.5, 0.75] AS probs,
+    QUANTILE_CONT("Sepal.Length", [0.25, 0.5, 0.75]) AS quantiles
+  FROM iris
+  GROUP BY Species)
+  
+SELECT Species, UNNEST(probs) AS prob, UNNEST(quantiles) AS quantile
+FROM nested
+```
