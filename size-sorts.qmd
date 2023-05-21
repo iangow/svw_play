@@ -1,7 +1,12 @@
 # Size Sorts and p-Hacking: Database version
 
+::: {.panel-tabset}
+
+## Original
+
 ```{r}
 #| warning: false
+#| eval: false
 library(tidyverse)
 library(DBI)
 library(scales)
@@ -11,7 +16,21 @@ library(furrr)
 library(rlang)
 ```
 
-  
+## dbplyr
+ 
+```{r}
+#| warning: false
+library(tidyverse)
+library(DBI)
+library(scales)
+library(sandwich)
+library(lmtest)
+library(dbplyr)
+library(rlang)
+```
+
+:::
+
 ## Data Preparation
 
 ::: {.panel-tabset}
@@ -164,6 +183,8 @@ crsp_monthly |>
 
 :::
 
+The next code chunk is the same.
+
 ```{r}
 crsp_monthly |>
   group_by(month, exchange) |>
@@ -187,10 +208,44 @@ crsp_monthly |>
     title = "Share of total market capitalization per listing exchange"
   )
 ```
+
+::: {.panel-tabset}
+
+## Original
+
+```{r}
+#| eval: false
+create_summary <- function(data, column_name) {
+  data |>
+    select(value = {{ column_name }}) |>
+    summarize(
+      mean = mean(value),
+      sd = sd(value),
+      min = min(value),
+      q05 = quantile(value, 0.05),
+      q50 = quantile(value, 0.50),
+      q95 = quantile(value, 0.95),
+      max = max(value),
+      n = n()
+    )
+}
+
+crsp_monthly |>
+  filter(month == max(month)) |>
+  group_by(exchange) |>
+  create_summary(mktcap) |>
+  add_row(crsp_monthly |>
+            filter(month == max(month)) |>
+            create_summary(mktcap) |>
+            mutate(exchange = "Overall"))
+```
+
+## dbplyr
+
 ```{r}
 create_summary <- function(data, column_name) {
   data |>
-    mutate(value = {{ column_name }}) |>
+    select(value = {{ column_name }}) |>
     summarize(
       mean = mean(value),
       sd = sd(value),
@@ -214,6 +269,39 @@ crsp_monthly |>
             mutate(exchange = "Overall")) |>
   collect()
 ```
+
+:::
+
+::: {.panel-tabset}
+
+## Original
+
+```{r}
+#| eval: false
+assign_portfolio <- function(n_portfolios,
+                             exchanges,
+                             data) {
+  breakpoints <- data |>
+    filter(exchange %in% exchanges) |>
+    reframe(breakpoint = quantile(
+      mktcap_lag,
+      probs = seq(0, 1, length.out = n_portfolios + 1),
+      na.rm = TRUE
+    )) |>
+    pull(breakpoint) |>
+    as.numeric()
+
+  assigned_portfolios <- data |>
+    mutate(portfolio = findInterval(mktcap_lag,
+      breakpoints,
+      all.inside = TRUE
+    )) |>
+    pull(portfolio)
+  return(assigned_portfolios)
+}
+```
+
+## dbplyr
 
 ```{r}
 get_breaks <- function(data, n_portfolios, exchanges) {
@@ -243,7 +331,7 @@ get_breaks <- function(data, n_portfolios, exchanges) {
 assign_portfolio <- function(data, n_portfolios, exchanges) {
   breaks <- get_breaks(data, n_portfolios, exchanges)
   
-    data |>
+  data |>
     inner_join(breaks, 
                join_by(month,
                        mktcap_lag >= port_min,
@@ -252,6 +340,39 @@ assign_portfolio <- function(data, n_portfolios, exchanges) {
 }
 ```
 
+:::
+
+::: {.panel-tabset}
+
+## Original
+
+```{r}
+compute_portfolio_returns <- function(n_portfolios = 10,
+                                      exchanges = c("NYSE", "NASDAQ", "AMEX"),
+                                      value_weighted = TRUE,
+                                      data = crsp_monthly) {
+  data |>
+    group_by(month) |>
+    mutate(portfolio = assign_portfolio(
+      n_portfolios = n_portfolios,
+      exchanges = exchanges,
+      data = pick(everything())
+    )) |>
+    group_by(month, portfolio) |>
+    summarize(
+      ret = if_else(value_weighted,
+        weighted.mean(ret_excess, mktcap_lag),
+        mean(ret_excess)
+      ),
+      .groups = "drop_last"
+    ) |>
+    summarize(size_premium = ret[portfolio == min(portfolio)] -
+      ret[portfolio == max(portfolio)]) |>
+    summarize(size_premium = mean(size_premium))
+}
+```
+
+## dbplyr
 
 ```{r}
 compute_portfolio_returns <- function(data = crsp_monthly,
@@ -284,6 +405,37 @@ compute_portfolio_returns <- function(data = crsp_monthly,
 }
 ```
 
+:::
+
+
+::: {.panel-tabset}
+
+## Original
+
+```{r}
+#| eval: false
+ret_all <- compute_portfolio_returns(
+  n_portfolios = 2,
+  exchanges = c("NYSE", "NASDAQ", "AMEX"),
+  value_weighted = TRUE,
+  data = crsp_monthly
+)
+
+ret_nyse <- compute_portfolio_returns(
+  n_portfolios = 2,
+  exchanges = "NYSE",
+  value_weighted = TRUE,
+  data = crsp_monthly
+)
+
+tibble(
+  Exchanges = c("NYSE, NASDAQ & AMEX", "NYSE"),
+  Premium = as.numeric(c(ret_all, ret_nyse)) * 100
+)
+```
+
+## dbplyr
+
 ```{r}
 ret_all <- 
   crsp_monthly |>
@@ -299,6 +451,8 @@ ret_nyse <-
 
 bind_rows(ret_all, ret_nyse)
 ```
+
+:::
 
 ```{r}
 p_hacking_setup <- 
