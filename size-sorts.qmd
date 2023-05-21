@@ -1,4 +1,11 @@
-# Size Sorts and p-Hacking: Database version
+# Size Sorts and p-Hacking
+
+We do not need the `furr` package for the `dbplyr` version of the code, but we do load the `dbplyr` package so that we can access the `window_order()` function below.
+
+```{r}
+#| include: false
+use_dbplyr <- TRUE 
+```
 
 ::: {.panel-tabset}
 
@@ -6,7 +13,7 @@
 
 ```{r}
 #| warning: false
-#| eval: false
+#| eval: !expr '!use_dbplyr'
 library(tidyverse)
 library(DBI)
 library(scales)
@@ -20,6 +27,7 @@ library(rlang)
  
 ```{r}
 #| warning: false
+#| eval: !expr 'use_dbplyr'
 library(tidyverse)
 library(DBI)
 library(scales)
@@ -56,6 +64,7 @@ factors_ff_monthly <-
 ## dbplyr
 
 ```{r}
+#| eval: !expr 'use_dbplyr'
 tidy_finance <- dbConnect(
   duckdb::duckdb(),
   "data/tidy_finance.duckdb",
@@ -137,6 +146,7 @@ crsp_monthly |>
 
 ```{r}
 #| warning: false
+#| eval: !expr 'use_dbplyr'
 monthly_quantiles <-
   crsp_monthly |>
   group_by(month) |>
@@ -243,6 +253,7 @@ crsp_monthly |>
 ## dbplyr
 
 ```{r}
+#| eval: !expr 'use_dbplyr'
 create_summary <- function(data, column_name) {
   data |>
     select(value = {{ column_name }}) |>
@@ -304,6 +315,7 @@ assign_portfolio <- function(n_portfolios,
 ## dbplyr
 
 ```{r}
+#| eval: !expr 'use_dbplyr'
 get_breaks <- function(data, n_portfolios, exchanges) {
   
   ports <- 0:n_portfolios
@@ -319,7 +331,7 @@ get_breaks <- function(data, n_portfolios, exchanges) {
     mutate(portfolio = unnest(portfolio),
            breaks = unnest(breaks)) |>
     group_by(month) |>
-    dbplyr::window_order(portfolio) |>
+    window_order(portfolio) |>
     mutate(port_max = if_else(portfolio == n_portfolios, Inf, breaks),
            port_min = if_else(portfolio == 1, -Inf, lag(breaks))) |>
     filter(portfolio > 0) |>
@@ -375,6 +387,7 @@ compute_portfolio_returns <- function(n_portfolios = 10,
 ## dbplyr
 
 ```{r}
+#| eval: !expr 'use_dbplyr'
 compute_portfolio_returns <- function(data = crsp_monthly,
                                       n_portfolios = 10,
                                       exchanges = c("NYSE", "NASDAQ", "AMEX"),
@@ -437,6 +450,7 @@ tibble(
 ## dbplyr
 
 ```{r}
+#| eval: !expr 'use_dbplyr'
 ret_all <- 
   crsp_monthly |>
   compute_portfolio_returns(n_portfolios = 2,
