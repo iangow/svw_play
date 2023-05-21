@@ -354,15 +354,24 @@ assign_portfolio <- function(data, n_portfolios, exchanges) {
 
 :::
 
+Here I tweak the code so that the `data` argument comes first in `compute_portfolio_returns()`.
+This facilitates a pipe-based approach, which I use below in the `dbplyr` code.
+
+With the `dbplyr` approach we have no `weighted.mean()` function to use.
+Instead, we calculate the weighted mean "by hand" and set `weight = if_else(value_weighted, mktcap_lag, 1)` (i.e., `weight` is `mktcap_lag` for value-weighted returns, but one otherwise).
+
 ::: {.panel-tabset}
 
 ## Original
 
 ```{r}
-compute_portfolio_returns <- function(n_portfolios = 10,
-                                      exchanges = c("NYSE", "NASDAQ", "AMEX"),
-                                      value_weighted = TRUE,
-                                      data = crsp_monthly) {
+#| eval: !expr '!use_dbplyr'
+compute_portfolio_returns <- 
+  function(data = crsp_monthly,
+           n_portfolios = 10,
+           exchanges = c("NYSE", "NASDAQ", "AMEX"),
+           value_weighted = TRUE) {
+  
   data |>
     group_by(month) |>
     mutate(portfolio = assign_portfolio(
@@ -388,10 +397,11 @@ compute_portfolio_returns <- function(n_portfolios = 10,
 
 ```{r}
 #| eval: !expr 'use_dbplyr'
-compute_portfolio_returns <- function(data = crsp_monthly,
-                                      n_portfolios = 10,
-                                      exchanges = c("NYSE", "NASDAQ", "AMEX"),
-                                      value_weighted = TRUE) {
+compute_portfolio_returns <- 
+  function(data = crsp_monthly,
+           n_portfolios = 10,
+           exchanges = c("NYSE", "NASDAQ", "AMEX"),
+           value_weighted = TRUE) {
   
   exchanges_str <- str_flatten(exchanges, ", ")
 
@@ -420,13 +430,12 @@ compute_portfolio_returns <- function(data = crsp_monthly,
 
 :::
 
-
 ::: {.panel-tabset}
 
 ## Original
 
 ```{r}
-#| eval: false
+#| eval: !expr '!use_dbplyr'
 ret_all <- compute_portfolio_returns(
   n_portfolios = 2,
   exchanges = c("NYSE", "NASDAQ", "AMEX"),
@@ -468,6 +477,8 @@ bind_rows(ret_all, ret_nyse)
 
 :::
 
+The code for `p_hacking_setup` is common across the two approaches.
+
 ```{r}
 p_hacking_setup <- 
   expand_grid(
@@ -481,7 +492,38 @@ p_hacking_setup <-
       crsp_monthly |> filter(month >="1990-06-01")'))
 ```
 
+::: {.panel-tabset}
+
+Because DuckDB will use multiple cores without explicit instructions, I don't need to set up `multisession` with the `dbplyr` approach.
+
+
+## Original
+
 ```{r}
+#| eval: !expr '!use_dbplyr'
+plan(multisession, workers = availableCores())
+
+p_hacking_setup <- p_hacking_setup |>
+  mutate(size_premium = future_pmap(
+    .l = list(
+      n_portfolios,
+      exchanges,
+      value_weighted,
+      data
+    ),
+    .f = ~ compute_portfolio_returns(
+      n_portfolios = ..1,
+      exchanges = ..2,
+      value_weighted = ..3,
+      data = eval_tidy(..4)
+    )
+  ))
+```
+
+## dbplyr
+
+```{r}
+#| eval: !expr 'use_dbplyr'
 p_hacking_setup <- 
   p_hacking_setup |>
   mutate(size_premium = 
@@ -493,25 +535,50 @@ p_hacking_setup <-
                   value_weighted = ..4)))
 ```
 
+:::
+
+::: {.panel-tabset}
+
+## Original
 
 ```{r}
-p_hacking_results <- 
-  p_hacking_setup |>
-  select(-exchanges) |>
+#| eval: !expr '!use_dbplyr'
+p_hacking_results <- p_hacking_setup |>
   mutate(data = map_chr(data, deparse)) |>
   unnest(size_premium) |>
   arrange(desc(size_premium))
 
 p_hacking_results
 ```
+
+## dbplyr
+
+```{r}
+#| eval: !expr 'use_dbplyr'
+
+
+p_hacking_results <- 
+  p_hacking_setup |>
+  select(-exchanges) |>
+  mutate(data = map_chr(data, deparse)) |>
+  unnest(size_premium) |>
+  arrange(desc(size_premium)) |>
+  filter(!is.na(size_premium))
+
+p_hacking_results
+```
+
+:::
+
 ```{r}
 smb_mean <- 
   factors_ff_monthly |> 
   summarize(mean(smb, na.rm = TRUE)) |>
   pull()
+```
 
+```{r}
 p_hacking_results |>
-  filter(!is.na(size_premium)) |>
   ggplot(aes(x = size_premium)) +
   geom_histogram(bins = nrow(p_hacking_results)) +
   labs(
@@ -524,6 +591,9 @@ p_hacking_results |>
   scale_x_continuous(labels = percent)
 ```
 
+Finally, we close the database.
+
 ```{r}
+#| eval: !expr '!use_dbplyr'
 dbDisconnect(tidy_finance, shutdown = TRUE)
 ```
