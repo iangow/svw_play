@@ -17,7 +17,7 @@ book:
     - betas.qmd
     - uni-sorts.qmd
     - size-sorts.qmd
-    - size-sorts-orig.qmd
+    # - size-sorts-orig.qmd
     - value-bivariate-sorts.qmd
     - value-bivariate-sorts-orig.qmd
     - references.qmd
@@ -27,3 +27,4 @@ bibliography: references.bib
 format:
   html:
     theme: cosmo
+    df-print: kable
