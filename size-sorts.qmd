@@ -14,17 +14,107 @@ library(rlang)
   
 ## Data Preparation
 
+::: {.panel-tabset}
+
+## Original
+
+```{r}
+#| eval: false
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE)
+
+crsp_monthly <- 
+  tbl(tidy_finance, "crsp_monthly") |> 
+  collect()
+
+factors_ff_monthly <- 
+  tbl(tidy_finance, "factors_ff_monthly") |> 
+  collect() 
+```
+
+## dbplyr
+
 ```{r}
 tidy_finance <- dbConnect(
   duckdb::duckdb(),
   "data/tidy_finance.duckdb",
   read_only = TRUE)
 
-crsp_monthly <- tbl(tidy_finance, "crsp_monthly")
-factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly") 
+crsp_monthly <- 
+  tbl(tidy_finance, "crsp_monthly")
+
+
+factors_ff_monthly <- 
+  tbl(tidy_finance, "factors_ff_monthly") 
+ 
 ```
+:::
 
 ## Size Distribution
+
+In the following code, we need to make a few tweaks in translating it to `dbplyr`.
+
+First, we want to extract the calculations of quantiles by month into a separate query.
+These calculations are grouped aggregates, so should happen inside a `group_by()`/`summarize()` query in SQL.
+We also include the calculation of `total_market_cap` in this query.
+
+Second, I simplify the creation of the quantile indicators (e.g., `top01`).
+There is no need to write `if_else(condition == TRUE, 1, 0)` when `condition` will effectively yield the same result.
+This means that we do not need to write `mktcap[top01 == 1]`, but can use `mktcap[top01]`.
+
+Third, the original approach has calculations such as `sum(mktcap[top01 == 1]) / total_market_cap` inside a `summarize()` call.
+However, SQL implementations are normally strict in requiring variables to appear either inside an aggregate function (e.g., `sum()`) or as part of the grouping (`group_by` or `GROUP BY`).
+In the original calculation is outside the `sum()` aggregate and not part of the grouping set (we have `group_by(month)`).
+
+Fourth, because we want to use factors for the plot, we need to `collect()` before constructing the factor.
+
+Otherwise the two approaches are the same.
+
+::: {.panel-tabset}
+
+## Original
+
+```{r}
+#| warning: false
+#| eval: false
+crsp_monthly |>
+  group_by(month) |>
+  mutate(
+    top01 = if_else(mktcap >= quantile(mktcap, 0.99), 1, 0),
+    top05 = if_else(mktcap >= quantile(mktcap, 0.95), 1, 0),
+    top10 = if_else(mktcap >= quantile(mktcap, 0.90), 1, 0),
+    top25 = if_else(mktcap >= quantile(mktcap, 0.75), 1, 0)
+  ) |>
+  summarize(
+    total_market_cap =  sum(mktcap),
+    `Largest 1% of stocks` = sum(mktcap[top01 == 1]) / total_market_cap,
+    `Largest 5% of stocks` = sum(mktcap[top05 == 1]) / total_market_cap,
+    `Largest 10% of stocks` = sum(mktcap[top10 == 1]) / total_market_cap,
+    `Largest 25% of stocks` = sum(mktcap[top25 == 1]) / total_market_cap,
+    .groups = "drop"
+  ) |>
+  select(-total_market_cap) |> 
+  pivot_longer(cols = -month) |>
+  mutate(name = factor(name, levels = c(
+    "Largest 1% of stocks", "Largest 5% of stocks",
+    "Largest 10% of stocks", "Largest 25% of stocks"
+  ))) |>
+  ggplot(aes(
+    x = month, 
+    y = value, 
+    color = name,
+    linetype = name)) +
+  geom_line() +
+  scale_y_continuous(labels = percent, limits = c(0, 1)) +
+  labs(
+    x = NULL, y = NULL, color = NULL, linetype = NULL,
+    title = "Percentage of total market capitalization in largest stocks"
+  )
+```
+
+## dbplyr
 
 ```{r}
 #| warning: false
@@ -71,6 +161,8 @@ crsp_monthly |>
     x = NULL, y = NULL, color = NULL, linetype = NULL,
     title = "Percentage of total market capitalization in largest stocks")
 ```
+
+:::
 
 ```{r}
 crsp_monthly |>
