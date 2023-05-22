@@ -20,6 +20,7 @@ book:
     # - size-sorts-orig.qmd
     - value-bivariate-sorts.qmd
     - value-bivariate-sorts-orig.qmd
+    - fes-ses.qmd
     - references.qmd
 
 bibliography: references.bib

@@ -1,0 +1,150 @@
+# Fixed Effects and Clustered Standard Errors
+
+```{r}
+#| warning: false
+library(tidyverse)
+library(DBI)
+library(fixest)
+```
+
+```{r}
+tidy_finance <- dbConnect(
+  duckdb::duckdb(),
+  "data/tidy_finance.duckdb",
+  read_only = TRUE
+)
+
+crsp <- 
+  tbl(tidy_finance, "crsp_monthly") |>
+  collect()
+
+compustat <- 
+  tbl(tidy_finance, "compustat") |>
+  collect()
+```
+
+```{r}
+data_investment <- 
+  compustat |>
+  mutate(month = floor_date(datadate, "month")) |>
+  left_join(compustat |>
+              select(gvkey, year, at_lag = at) |>
+              mutate(year = year + 1),
+    by = c("gvkey", "year")) |>
+  filter(at > 0, at_lag > 0) |>
+  mutate(
+    investment = capx / at_lag,
+    cash_flows = oancf / at_lag)
+
+data_investment <- 
+  data_investment |>
+  left_join(data_investment |>
+              select(gvkey, year, investment_lead = investment) |>
+              mutate(year = year - 1),
+  by = c("gvkey", "year"))
+```
+
+```{r}
+data_investment <- 
+  data_investment |>
+  left_join(crsp |>
+              select(gvkey, month, mktcap),
+            by = c("gvkey", "month")) |>
+  mutate(tobins_q = (mktcap + at - be + txdb) / at)
+
+data_investment <- 
+  data_investment |>
+  select(gvkey, year, investment_lead, cash_flows, tobins_q) |>
+  drop_na()
+```
+
+```{r}
+winsorize <- function(x, cut) {
+  x <- replace(
+    x,
+    x > quantile(x, 1 - cut, na.rm = T),
+    quantile(x, 1 - cut, na.rm = T)
+  )
+  x <- replace(
+    x,
+    x < quantile(x, cut, na.rm = T),
+    quantile(x, cut, na.rm = T)
+  )
+  return(x)
+}
+
+data_investment <- 
+  data_investment |>
+  mutate(across(
+    c(investment_lead, cash_flows, tobins_q),
+    ~ winsorize(., 0.01)
+  ))
+```
+
+```{r}
+data_investment |>
+  pivot_longer(
+    cols = c(investment_lead, cash_flows, tobins_q),
+    names_to = "measure"
+  ) |>
+  group_by(measure) |>
+  summarize(
+    mean = mean(value),
+    sd = sd(value),
+    min = min(value),
+    q05 = quantile(value, 0.05),
+    q50 = quantile(value, 0.50),
+    q95 = quantile(value, 0.95),
+    max = max(value),
+    n = n(),
+    .groups = "drop"
+  )
+```
+
+## Fixed Effects
+
+```{r}
+model_ols <- 
+  feols(fml = investment_lead ~ cash_flows + tobins_q,
+        se = "iid",
+        data = data_investment)
+model_ols
+```
+
+```{r}
+model_fe_firm <- 
+  feols(investment_lead ~ cash_flows + tobins_q | gvkey,
+        se = "iid",
+        data = data_investment)
+model_fe_firm
+```
+
+```{r}
+model_fe_firmyear <-
+  feols(investment_lead ~ cash_flows + tobins_q | gvkey + year,
+        se = "iid",
+        data = data_investment)
+model_fe_firmyear
+```
+
+```{r}
+etable(model_ols, model_fe_firm, model_fe_firmyear, 
+       coefstat = "tstat")
+```
+
+## Clustering Standard Errors
+
+```{r}
+model_cluster_firm <- 
+  feols(investment_lead ~ cash_flows + tobins_q | gvkey + year,
+        cluster = "gvkey", data = data_investment)
+
+model_cluster_firmyear <- 
+  feols(investment_lead ~ cash_flows + tobins_q | gvkey + year,
+        cluster = c("gvkey", "year"), data = data_investment)
+```
+
+```{r}
+etable(model_fe_firmyear, model_cluster_firm, model_cluster_firmyear,
+       coefstat = "tstat")
+```
