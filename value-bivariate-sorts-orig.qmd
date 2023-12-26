@@ -130,6 +130,16 @@ value_portfolios <- data_for_sorts |>
 ```
 
 ```{r}
+#| include: false
+#| eval: false
+db_store <- dbConnect(duckdb::duckdb(),
+                      dbdir = "value_portfolios.duckdb", 
+                      read_only = TRUE)
+value_portfolios <- tbl(db_store, "value_portfolios") |> collect()
+dbDisconnect(db_store)
+```
+
+```{r}
 value_premium <- value_portfolios |>
   group_by(month, portfolio_bm) |>
   summarize(ret = mean(ret), .groups = "drop_last") |>

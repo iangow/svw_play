@@ -139,6 +139,18 @@ value_portfolios <-
 ```
 
 ```{r}
+#| eval: false
+#| include: false
+db_store <- dbConnect(duckdb::duckdb(),
+                      dbdir = "value_portfolios.duckdb", 
+                      read_only = FALSE)
+dbWriteTable(db_store, name = "value_portfolios", value_portfolios,
+             overwrite = TRUE)
+
+dbDisconnect(db_store, shutdown = TRUE)
+```
+
+```{r}
 #| warning: false
 value_premium <- 
   value_portfolios |>
@@ -152,6 +164,18 @@ value_premium <-
   pivot_wider(names_from = portfolio_bm, values_from = ret) |>
   mutate(value_premium = max - min) |>
   summarize(value_premium = mean(value_premium))
+```
+
+```{r}
+value_premium <- 
+  value_portfolios |>
+  collect() |>
+  group_by(month, portfolio_bm) |>
+  summarize(ret = mean(ret), .groups = "drop_last") |>
+  summarize(value_premium = ret[portfolio_bm == max(portfolio_bm)] -
+    ret[portfolio_bm == min(portfolio_bm)])
+
+mean(value_premium$value_premium * 100)
 ```
 
 ```{r}
@@ -203,4 +227,9 @@ value_premium <-
 value_premium |>
   summarize(mean(value_premium, na.rm = TRUE)) |>
   pull() * 100
+```
+
+
+```{r}
+dbDisconnect(tidy_finance, shutdown = TRUE)
 ```

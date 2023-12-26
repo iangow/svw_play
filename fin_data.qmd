@@ -1,3 +1,161 @@
 # Accessing & Managing Financial Data
 
-The code for this chapter is found in `fin_data.R`.
+```{r}
+#| message: false
+library(tidyverse)
+library(scales)
+library(frenchdata)
+library(tidyquant)
+library(dbplyr)
+library(readxl)
+library(googledrive)
+library(arrow)
+```
+
+```{r}
+start_date <- ymd("1960-01-01")
+end_date <- ymd("2021-12-31")
+```
+
+## Fama-French data
+
+```{r}
+#| message: false
+factors_ff_monthly_raw <- download_french_data("Fama/French 3 Factors")
+factors_ff_monthly <-
+  factors_ff_monthly_raw$subsets$data[[1]] |>
+  transmute(
+    month = floor_date(ymd(str_c(date, "01")), "month"),
+    rf = as.numeric(RF) / 100,
+    mkt_excess = as.numeric(`Mkt-RF`) / 100,
+    smb = as.numeric(SMB) / 100,
+    hml = as.numeric(HML) / 100
+  ) |>
+  filter(month >= start_date & month <= end_date)
+
+factors_ff_daily_raw <- download_french_data("Fama/French 3 Factors [Daily]")
+factors_ff_daily <- 
+  factors_ff_daily_raw$subsets$data[[1]] |>
+  transmute(
+    date = ymd(date),
+    rf = as.numeric(RF) / 100,
+    mkt_excess = as.numeric(`Mkt-RF`) / 100,
+    smb = as.numeric(SMB) / 100,
+    hml = as.numeric(HML) / 100
+  ) |>
+  filter(date >= start_date & date <= end_date)
+
+industries_ff_monthly_raw <- download_french_data("10 Industry Portfolios")
+industries_ff_monthly <- 
+  industries_ff_monthly_raw$subsets$data[[1]] |>
+  mutate(month = floor_date(ymd(str_c(date, "01")), "month")) |>
+  mutate(across(where(is.numeric), ~ . / 100)) |>
+  select(month, everything(), -date) |>
+  filter(month >= start_date & month <= end_date)
+```
+
+## q-factors
+
+```{r}
+factors_q_monthly_link <-
+  str_c("http://global-q.org/uploads/1/2/2/6/",
+        "122679606/q5_factors_monthly_2021.csv")
+
+factors_q_monthly <- 
+  read_csv(factors_q_monthly_link) |>
+  mutate(month = ymd(str_c(year, month, "01", sep = "-"))) |>
+  select(-R_F, -R_MKT, -year) |>
+  rename_with(~ str_remove(., "R_")) |>
+  rename_with(~ str_to_lower(.)) |>
+  mutate(across(-month, ~ . / 100)) |>
+  filter(month >= start_date & month <= end_date)
+```
+
+## Macroeconomic predictors
+
+```{r}
+#| cache: true
+drive_deauth()
+
+macro_predictors_link <- str_c("https://docs.google.com/spreadsheets/d/",
+                               "1g4LOaRj4TvwJr9RIaA_nwrXXWTOy46bP")
+
+if (!dir.exists("data")) dir.create("data")
+
+if (!file.exists("data/macro_predictors.xlsx")) {
+  drive_download(
+    macro_predictors_link,
+    path = "data/macro_predictors.xlsx")
+}
+
+macro_predictors <- read_xlsx(
+  "data/macro_predictors.xlsx",
+  sheet = "Monthly"
+) |>
+  mutate(month = ym(yyyymm)) |>
+  mutate(across(where(is.character), as.numeric)) |>
+  mutate(
+    IndexDiv = Index + D12,
+    logret = log(IndexDiv) - log(lag(IndexDiv)),
+    Rfree = log(Rfree + 1),
+    rp_div = lead(logret - Rfree, 1), # Future excess market return
+    dp = log(D12) - log(Index), # Dividend Price ratio
+    dy = log(D12) - log(lag(Index)), # Dividend yield
+    ep = log(E12) - log(Index), # Earnings price ratio
+    de = log(D12) - log(E12), # Dividend payout ratio
+    tms = lty - tbl, # Term spread
+    dfy = BAA - AAA # Default yield spread
+  ) |>
+  select(month, rp_div, dp, dy, ep, de, svar,
+         bm = `b/m`, ntis, tbl, lty, ltr,
+         tms, dfy, infl
+  ) |>
+  filter(month >= start_date & month <= end_date) |>
+  drop_na()
+
+file.remove("data/macro_predictors.xlsx")
+```
+
+## Other macroeconomic data
+
+```{r}
+#| label: other-macro
+#| cache: true
+cpi_monthly <- tq_get("CPIAUCNS",
+                      get = "economic.data",
+                      from = start_date,
+                      to = end_date
+) |>
+  transmute(
+    month = floor_date(date, "month"),
+    cpi = price / price[month == max(month)]
+  )
+```
+
+## Setting a data repository
+
+```{r}
+#| cache: true
+#| label: pq-repo
+#| dependson: other-macro
+save_parquet <- function(df, schema = "tidy_finance",
+                         data_dir = Sys.getenv("DATA_DIR")) {
+  pq_dir <- file.path(data_dir, schema = schema)
+  if (!dir.exists(pq_dir)) dir.create(pq_dir)
+  pq_file_name <- str_c(deparse(substitute(df)), ".parquet")
+  pq_path <- file.path(pq_dir, pq_file_name)
+  write_parquet(df, sink = pq_path)
+}
+```
+
+We save all the tables above to a `tidy_finance` schema:
+  
+```{r}
+#| cache: true
+save_parquet(factors_ff_daily)
+save_parquet(factors_ff_monthly)
+save_parquet(industries_ff_monthly)
+save_parquet(factors_q_monthly)
+save_parquet(macro_predictors)
+save_parquet(cpi_monthly)
+```

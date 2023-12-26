@@ -6,7 +6,9 @@ start_date <- ymd("1960-01-01")
 end_date <- ymd("2021-12-31")
 
 # WRDS ----
-wrds <- dbConnect(RPostgres::Postgres(), bigint = "integer")
+
+
+funda_db <- load_parquet(db, "funda", "comp")
 
 funda_db <- tbl(wrds, in_schema("comp", "funda"))
 compustat <- 
@@ -33,19 +35,12 @@ compustat <-
     capx, # Capital investment
     oancf # Operating cash flow
   ) |>
-  collect()
-
-compustat <- 
-  compustat |>
   mutate(
     be = coalesce(seq, ceq + pstk, at - lt) +
       coalesce(txditc, txdb + itcb, 0) -
       coalesce(pstkrv, pstkl, pstk, 0),
     be = if_else(be <= 0, as.numeric(NA), be)
-  )
-
-compustat <- 
-  compustat |>
+  ) |>
   mutate(year = year(datadate)) |>
   group_by(gvkey, year) |>
   filter(datadate == max(datadate)) |>

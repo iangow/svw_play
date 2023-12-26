@@ -1,24 +1,11 @@
 # Beta Estimation 
 
-## Code to create beta
-
-Instead of the code in the book, I used the following code to create `beta` (here renamed `beta_alt`).
-The code from the book (see [here](https://gist.github.com/iangow/0e35eeee6e5a65190ee7e748bcc27c25)) takes 12 minutes and maxes out at about 37GB of RAM. 
-The code below takes 25 seconds and peaks at about 7GB.
-
-The code below is perhaps uglier than it needs to be, but is designed to get as close as possible to the results of the code in the book.
-Note that I get some differences with `beta_monthly`, but the same values for `beta_daily`.
-
 ```{r}
-#| file: make_beta_alt.R
-#| eval: false
-#| include: true
+system_time <- function(x) {
+  print(system.time(x))
+  x
+}
 ```
-
-## Analysis of betas
-
-Having created the table using the code below, I now include the analyses presented in the book, but using the database as the primary engine.
-Rendering this document takes less than six seconds.^[Note that code above that creates `beta_alt` is not run with this document.]
 
 ```{r}
 #| warning: false
@@ -26,21 +13,92 @@ library(tidyverse)
 library(DBI)
 library(scales)
 library(dbplyr)
+library(farr)
+```
+
+## Estimating Beta using Monthly Returns
+
+```{r}
+db <- dbConnect(duckdb::duckdb())
+crsp_monthly <- load_parquet(db, "crsp_monthly", "tidy_finance")
+crsp_daily <- load_parquet(db, "crsp_daily", "tidy_finance")
+factors_ff3_monthly <- load_parquet(db,
+                                    "factors_ff3_monthly", 
+                                    "tidy_finance") 
+factors_ff3_daily <- load_parquet(db,
+                                  "factors_ff3_daily", 
+                                  "tidy_finance") 
+```
+
+```{r}
+crsp_monthly <- 
+  crsp_monthly |>
+  select(permno, month, industry, ret_excess) |>
+  left_join(
+    factors_ff3_monthly |>
+      select(month, mkt_excess), by = "month")
 ```
 
 
 ```{r}
-#| eval: true
-tidy_finance <- dbConnect(
-  duckdb::duckdb(),
-  "data/tidy_finance.duckdb",
-  read_only = TRUE)
+fit <- lm(ret_excess ~ mkt_excess,
+  data = crsp_monthly |>
+    filter(permno == "14593")
+)
+
+summary(fit)
+```
+
+## Rolling-window estimation
+
+```{r}
+w <- paste("OVER (PARTITION BY permno",
+           "ORDER BY month",
+           "RANGE BETWEEN INTERVAL '60 MONTHS' PRECEDING AND",
+           "CURRENT ROW)")
 ```
 
 ```{r}
-beta <- tbl(tidy_finance, "beta_alt")
-crsp_monthly <- tbl(tidy_finance, "crsp_monthly")
+beta_monthly <-
+  crsp_monthly |>
+  mutate(beta = sql(paste("regr_slope(ret_excess, mkt_excess)", w)),
+         n_rets = sql(paste("count(ret_excess)", w))) |>
+  filter(n_rets >= 48) |>
+  select(permno, month, beta) |>
+  compute() |>
+  system_time()
 ```
+
+```{r}
+w <- paste("OVER (PARTITION BY permno",
+            "ORDER BY date",
+            "RANGE BETWEEN INTERVAL '3 MONTHS' PRECEDING AND CURRENT ROW)")
+
+```
+
+```{r}
+beta_daily <-
+  crsp_daily |>
+  inner_join(
+    factors_ff3_daily |>
+      select(date, mkt_excess), by = "date") |>
+  select(permno, date, month, ret_excess, mkt_excess) |>
+  mutate(beta = sql(paste("regr_slope(ret_excess, mkt_excess)", w)),
+         n_rets = sql(paste("count(ret_excess)", w))) |>
+  filter(n_rets >= 50) |>
+  mutate(month = floor_date(date, "month")) |>
+  group_by(permno, month) |>
+  filter(date == max(date, na.rm = TRUE)) |>
+  ungroup() |>
+  select(permno, month, date, beta) |>
+  compute() |>
+  system_time()
+```
+
+## Comparing beta estimates
+
+The remaining code is largely copy-pasted from Tidy Finance.
+Our focus here is @fig-beta-comp, a version of Figure 4 from Tidy Finance that compares monthly and daily beta estimates for four stocks.
 
 ```{r}
 examples <- tribble(
@@ -48,9 +106,18 @@ examples <- tribble(
   14593, "Apple",
   10107, "Microsoft",
   93436, "Tesla",
-  17778, "Berkshire Hathaway"
-) |>
-  copy_inline(tidy_finance, df = _)
+  17778, "Berkshire Hathaway") |>
+  copy_to(db, df = _, name = "examples", overwrite = TRUE)
+```
+
+Because we have retained `date`, we merge on that variable too when constructing `beta`.
+
+```{r}
+beta <- 
+  beta_monthly |>
+  full_join(beta_daily, 
+            by = c("permno", "month"),
+            suffix = c("_monthly", "_daily"))
 ```
 
 ```{r}
@@ -110,8 +177,10 @@ beta |>
 ```
 
 ```{r}
+#| label: fig-beta-comp
 beta |>
   inner_join(examples, by = "permno") |>
+  filter(month >= '1980-01-01') |>
   pivot_longer(cols = c(beta_monthly, beta_daily)) |>
   filter(!is.na(value)) |>
   ggplot(aes(
@@ -174,5 +243,5 @@ beta_long |>
 ```
 
 ```{r}
-dbDisconnect(tidy_finance, shutdown = TRUE)
+dbDisconnect(db, shutdown = TRUE)
 ```
