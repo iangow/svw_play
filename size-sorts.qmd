@@ -284,13 +284,18 @@ crsp_monthly |>
 
 :::
 
+The next step is one where an in-database approach is quite different from the approach taken in "Tidy Finance".
+The original approach uses a function `assign_portfolios()` that takes a data set containing information on the variable on which portfolios are to be formed and returns a vector that is incorporated in the original data as a variable using `mutate()`.
+In general, this approach will not work with databases.
+
+With databases, one needs to reason in terms of tables or "tidy data sets" in the sense of [Wickham (2004)](http://vita.had.co.nz/papers/tidy-data.html).
+
 ::: {.panel-tabset group="approach"}
 
 ## dbplyr
 
 ```{r}
-#| eval: !expr 'use_dbplyr'
-get_breaks <- function(data, n_portfolios, exchanges) {
+get_breaks <- function(data, var, n_portfolios) {
   
   ports <- 0:n_portfolios
   ports_sql <- sql(paste0("[", paste(ports, collapse = ", "), "]"))
@@ -298,31 +303,34 @@ get_breaks <- function(data, n_portfolios, exchanges) {
   breaks_sql <- sql(paste0("[", paste(breaks, collapse = ", "), "]"))
   
   data |>
-    filter(exchange %in% exchanges) |>
+    
     summarize(portfolio = ports_sql,
-              breaks = quantile_cont(mktcap_lag, breaks_sql),
+              breaks = quantile_cont({{ var }}, breaks_sql),
               .groups = "keep") %>%
     mutate(portfolio = unnest(portfolio),
            breaks = unnest(breaks)) |>
-    group_by(month) |>
-    window_order(portfolio) |>
+    dbplyr::window_order(portfolio) |>
     mutate(port_max = if_else(portfolio == n_portfolios, Inf, breaks),
            port_min = if_else(portfolio == 1, -Inf, lag(breaks))) |>
     filter(portfolio > 0) |>
-    select(month, portfolio, port_max, port_min) |>
-    ungroup() |>
-    compute()
+    select(group_cols(), portfolio, port_max, port_min)
 }
 
-assign_portfolio <- function(data, n_portfolios, exchanges) {
-  breaks <- get_breaks(data, n_portfolios, exchanges)
+assign_portfolio <- function(data, var, n_portfolios, exchanges) {
+  breaks <- 
+    data |>
+    filter(exchange %in% exchanges) |>
+    get_breaks({{ var }}, n_portfolios)
+  
+  group_vars <- group_vars(data) 
   
   data |>
     inner_join(breaks, 
-               join_by(month,
-                       mktcap_lag >= port_min,
-                       mktcap_lag < port_max)) |>
-    select(-port_min, -port_max) 
+               join_by(!!!group_vars, 
+                       {{ var }} >= port_min,
+                       {{ var }} < port_max)) |>
+    select(-port_min, -port_max) |>
+    compute()
 }
 ```
 
@@ -377,7 +385,7 @@ compute_portfolio_returns <-
 
   data |>
     group_by(month) |>
-    assign_portfolio(n_portfolios, exchanges) |>
+    assign_portfolio(mktcap_lag, n_portfolios, exchanges) |>
     group_by(month, portfolio) |>
     filter(!is.na(ret), !is.na(mktcap_lag)) |>
     mutate(weight = if_else(value_weighted, mktcap_lag, 1)) |>
