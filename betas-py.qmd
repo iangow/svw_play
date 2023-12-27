@@ -1,0 +1,343 @@
+# Beta Estimation 
+
+```{python}
+from regtabletotext import prettify_result
+import numpy as np
+import pandas as pd
+import statsmodels.formula.api as smf
+from plotnine import *
+from mizani.breaks import date_breaks
+from mizani.formatters import percent_format, date_format
+```
+
+
+## Estimating Beta using monthly returns
+
+```{python}
+import ibis
+ibis.options.interactive = True
+```
+ 
+```{python}
+import os
+```
+
+```{python}
+os.environ['DATA_DIR'] = "/Users/igow/Library/CloudStorage/Dropbox/pq_data"
+```
+
+```{python}
+data_dir = os.environ['DATA_DIR']
+data_dir
+```
+
+```{python}
+def load_parquet(con, table, schema, data_dir=os.environ['DATA_DIR']):
+  pq_file = os.path.join(data_dir, schema, table + ".parquet")
+  return con.read_parquet(pq_file)
+```
+
+```{python}
+db = ibis.duckdb.connect()
+```
+
+```{python}
+crsp_monthly = load_parquet(db, "crsp_monthly", "tidy_finance")
+crsp_daily = load_parquet(db, "crsp_daily", "tidy_finance")
+factors_ff3_monthly = load_parquet(db,
+                                   "factors_ff3_monthly", 
+                                   "tidy_finance") 
+factors_ff3_daily = load_parquet(db,
+                                 "factors_ff3_daily", 
+                                 "tidy_finance") 
+```
+
+```{python}
+crsp_monthly = (crsp_monthly
+  .left_join(
+    factors_ff3_monthly
+    .select("month", "mkt_excess"), ["month"])
+  .select("permno", "month", "industry", "ret_excess", "mkt_excess"))
+```
+
+
+```{python}
+from ibis import _
+
+model_beta = (smf.ols(
+    formula="ret_excess ~ mkt_excess",
+    data=crsp_monthly.filter([_.permno == 14593]))
+  .fit()
+)
+prettify_result(model_beta)
+```
+## Rolling-window estimation
+
+```{python}
+window_size = 60
+min_obs = 48
+```
+
+```{python}
+from ibis import udf
+
+w = ibis.window(group_by="permno", order_by="month", 
+                preceding=window_size, following=0)
+```
+
+```{python}
+@ibis.udf.agg.builtin
+def regr_slope(y: float, x: float) -> float:
+    ...
+    
+@ibis.udf.agg.builtin
+def regr_count(y: float, x: float) -> float:
+    ...
+    
+@ibis.udf.agg.builtin
+def count() -> float:
+    ...
+    
+@ibis.udf.agg.builtin
+def max(x) -> ibis.dtype("Date"):
+    ...
+```
+
+```{python}
+valid_permnos = (crsp_monthly
+  .group_by("permno")
+  .aggregate(n_obs = count())
+  .filter(_.n_obs >= window_size + 1)
+  .select("permno"))
+```  
+
+```{python}
+beta_monthly = (crsp_monthly
+    .inner_join(valid_permnos, ["permno"])
+    .mutate(beta = regr_slope(_.ret_excess, _.mkt_excess).over(w),
+            n_rets = regr_count(_.ret_excess, _.mkt_excess).over(w))
+    .select("permno", "month", "beta", "n_rets")
+    .rename({"beta_monthly": "beta"})
+    .filter([_.n_rets >= min_obs]))
+```
+
+```{python}
+examples = pd.DataFrame({
+  "permno": [14593, 10107, 93436, 17778],
+  "company": ["Apple", "Microsoft", 
+              "Tesla", "Berkshire Hathaway"]
+})
+```
+
+```{python}
+examples_db = ibis.memtable(examples, name="examples")
+```
+
+```{python}
+beta_example = (beta_monthly
+  .inner_join(examples_db, ["permno"])
+  .to_pandas()
+)
+
+plot_beta = (
+  ggplot(beta_example, 
+         aes(x="month", y="beta_monthly", 
+         color="company", linetype="company")) + 
+  geom_line() + 
+  scale_x_datetime(breaks=date_breaks("5 year"), 
+                   labels=date_format("%Y")) + 
+  labs(x="", y="", color="", linetype="",
+       title=("Monthly beta estimates for example stocks "
+              "using 5 years of data"))
+)
+plot_beta.draw()
+```
+
+## Estimating beta using daily returns
+
+```{python}
+window_size = 60
+min_obs = 50
+```
+
+```{python}
+wd = ibis.window(group_by="permno", order_by="date", 
+                 preceding=ibis.interval(months=3), following=0)
+```
+
+```{python}
+wd = ibis.window(group_by="permno", order_by="date",
+                 preceding=window_size, following=0)
+```
+
+```{python}
+valid_permnos = (crsp_monthly
+  .group_by("permno")
+  .aggregate(n_obs = count())
+  .filter(_.n_obs >= window_size + 1)
+  .select("permno"))
+```  
+
+```{python}
+beta_daily = (crsp_daily
+    .select("permno", "month", "date", "ret_excess")
+    .inner_join(valid_permnos, ["permno"])
+    .left_join(
+        factors_ff3_daily
+        .select("date", "mkt_excess"), ["date"])
+    .mutate(beta_daily = regr_slope(_.ret_excess, _.mkt_excess).over(wd),
+            n_rets = regr_count(_.ret_excess, _.mkt_excess).over(wd))
+    .group_by(["permno", "month"])
+    .mutate(last_date = max(_.date))
+    .filter(_.date == _.last_date)
+    .select("permno", "month", "beta_daily", "n_rets")
+    .filter([_.n_rets >= min_obs])
+  )
+```            
+
+## Comparing beta estimates
+
+```{python}
+beta_industries = (beta_monthly
+  .inner_join(crsp_monthly, ["permno", "month"])
+  .filter([_.beta_monthly.notnull()])
+  .group_by(["industry", "permno"])
+  .aggregate(beta_monthly=lambda x: x.beta_monthly.mean())
+  .to_pandas())
+```
+
+The following two chunks come straight from [*Tidy Finance with Python*](https://www.tidy-finance.org/python/beta-estimation.html#comparing-beta-estimates).
+
+```{python}
+industry_order = (beta_industries
+  .groupby("industry")["beta_monthly"]
+  .aggregate("median").sort_values()
+  .index.tolist()
+)
+```
+
+```{python}
+plot_beta_industries = (
+  ggplot(beta_industries, 
+         aes(x="industry", y="beta_monthly")) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_x_discrete(limits=industry_order) +
+  labs(x="", y="", 
+       title="Firm-specific beta distributions by industry")
+)
+plot_beta_industries.draw()
+```
+
+```{python}
+beta_quantiles = (beta_monthly
+  .to_pandas()
+  .groupby("month")["beta_monthly"]
+  .quantile(q=np.arange(0.1, 1.0, 0.1))
+  .reset_index()
+  .rename(columns={"level_1": "quantile"})
+  .assign(
+    quantile=lambda x: (x["quantile"] * 100).astype(int)
+  )
+  .dropna()
+)
+
+plot_beta_quantiles = (
+  ggplot(beta_quantiles, 
+         aes(x="month", y="beta_monthly", 
+             color="factor(quantile)")) +
+  geom_line() +
+  scale_x_datetime(breaks=date_breaks("10 year"), 
+                   labels=date_format("%Y")) +
+  labs(x="", y="", color="",
+       title="Monthly deciles of estimated betas")
+)
+plot_beta_quantiles.draw()
+```
+
+```{python}
+beta_sql = (beta_daily
+  .left_join(beta_monthly, ["permno", "month"])
+  .select("permno", "month", "beta_daily", "beta_monthly")
+)
+```
+
+```{python}
+pq_file = os.path.join(data_dir, "tidy_finance", "beta.parquet")
+beta_sql.to_parquet(pq_file)
+beta = load_parquet(db, "beta", "tidy_finance")
+```
+
+
+```{python}
+examples_db = ibis.memtable(examples, name="examples")
+
+beta_comparison = (beta
+  .inner_join(examples_db, ["permno"])
+  .to_pandas()
+  .melt(id_vars=["permno", "month", "company"],
+        value_vars=["beta_monthly", "beta_daily"],
+        var_name="name", value_name="value")
+  .dropna()
+)
+```
+
+```{python}
+plot_beta_comparison = (
+  ggplot(beta_comparison,
+         aes(x="month", y="value", color="name")) +
+  geom_line() +
+  facet_wrap("~company", ncol=1) +
+  scale_x_datetime(breaks=date_breaks("10 year"), 
+                   labels=date_format("%Y")) +
+  labs(x="", y="", color="",
+       title=("Comparison of beta estimates using monthly "
+              "and daily data"))
+)
+plot_beta_comparison.draw()
+```
+
+
+
+```{python}
+beta_long = (crsp_monthly.
+  .filter([not(isna(_.ret))]))
+```
+
+```{python}
+  .left_join(beta, ["permno", "month"])
+  .select("permno", "month", "beta_monthly", "beta_daily")
+  .to_pandas()
+  .melt(id_vars=["permno", "month"],
+        value_vars=["beta_monthly", "beta_daily"],
+        var_name="name", value_name="value")
+  .groupby(["month", "name"])
+  .aggregate(
+    share=("value", lambda x: sum(~x.isna()) / len(x))
+  )
+  .reset_index()
+)
+```
+
+```{python}
+plot_beta_long = (
+  ggplot(beta_long, 
+         aes(x="month", y="share", color="name", 
+             linetype="name")) +
+  geom_line() +
+  scale_y_continuous(labels=percent_format()) +
+  scale_x_datetime(breaks=date_breaks("10 year"), 
+                   labels=date_format("%Y")) +
+  labs(x=None, y=None, color=None, linetype=None,
+       title=("End-of-month share of securities with beta "
+              "estimates"))
+)
+plot_beta_long.draw()
+```
+```{python}
+beta_long.groupby("name")["share"].describe()
+```
+
+```{python}
+beta.select("beta_monthly", "beta_daily").to_pandas().corr()
+```

@@ -1,0 +1,366 @@
+# Beta Estimation 
+
+```{python}
+import pandas as pd
+import numpy as np
+import sqlite3
+import statsmodels.formula.api as smf
+
+from regtabletotext import prettify_result
+from statsmodels.regression.rolling import RollingOLS
+from plotnine import *
+from mizani.breaks import date_breaks
+from mizani.formatters import percent_format, date_format
+from joblib import Parallel, delayed, cpu_count
+```
+
+##  Estimating Beta using Monthly Returns
+
+```{python}
+tidy_finance = sqlite3.connect(
+  database="data/tidy_finance_r.sqlite"
+)
+
+crsp_monthly = (pd.read_sql_query(
+  sql=("SELECT permno, month, industry, ret_excess " 
+       "FROM crsp_monthly"),
+  con=tidy_finance,
+  parse_dates={"month"})
+  .dropna()
+)
+
+factors_ff3_monthly = (pd.read_sql_query(
+    sql="SELECT month, mkt_excess FROM factors_ff3_monthly",
+    con=tidy_finance,
+    parse_dates={"month"})
+  .dropna()
+)
+
+crsp_monthly = (crsp_monthly
+  .merge(factors_ff3_monthly, 
+         how="left", 
+         on="month")
+)
+```
+
+```{python}
+model_beta = (smf.ols(
+    formula="ret_excess ~ mkt_excess",
+    data=crsp_monthly.query("permno == 14593"))
+  .fit()
+)
+prettify_result(model_beta)
+```
+## Rolling-Window Estimation
+
+```{python}
+def roll_capm_estimation(data, window_size, min_obs):
+  
+    data = data.sort_values("month")
+
+    result = (RollingOLS.from_formula(
+      formula="ret_excess ~ mkt_excess",
+      data=data,
+      window=window_size,
+      min_nobs=min_obs
+      )
+      .fit()
+      .params["mkt_excess"]
+    )
+    
+    result.index = data.index
+    
+    return result
+```
+
+```{python}
+examples = pd.DataFrame({
+  "permno": [14593, 10107, 93436, 17778],
+  "company": ["Apple", "Microsoft", 
+              "Tesla", "Berkshire Hathaway"]
+})
+
+window_size = 60
+min_obs = 48
+```
+
+```{python}
+beta_example = (crsp_monthly
+  .merge(examples, 
+         how="inner", 
+         on="permno")
+  .groupby(["permno"], group_keys=False)
+  .apply(
+    lambda x: x.assign(
+      beta=roll_capm_estimation(x, window_size, min_obs)
+    )
+  )
+  .dropna()
+)
+```
+
+```{python}
+plot_beta = (
+  ggplot(beta_example, 
+         aes(x="month", y="beta", 
+         color="company", linetype="company")) + 
+  geom_line() + 
+  scale_x_datetime(breaks=date_breaks("5 year"), 
+                   labels=date_format("%Y")) + 
+  labs(x="", y="", color="", linetype="",
+       title=("Monthly beta estimates for example stocks "
+              "using 5 years of data"))
+)
+plot_beta.draw()
+```
+
+## Estimating Beta using Monthly Returns
+
+```{python}
+valid_permnos = (crsp_monthly
+  .groupby("permno")["permno"]
+  .count()
+  .reset_index(name="counts")
+  .query("counts > @window_size + 1")
+)
+```
+
+```{python}
+def roll_capm_estimation_for_joblib(permno, group):
+  
+    if "date" in group.columns:
+      group = group.sort_values(by="date")
+    else:
+      group = group.sort_values(by="month")
+
+    beta_values = (RollingOLS.from_formula(
+        formula="ret_excess ~ mkt_excess",
+        data=group,
+        window=window_size,
+        min_nobs=min_obs
+      )
+      .fit()
+      .params["mkt_excess"]
+    )
+    
+    result = pd.DataFrame(beta_values)
+    result.columns = ["beta"]
+    result["month"] = group["month"].values
+    result["permno"] = permno
+    try:
+      result["date"] = group["date"].values
+      result = result[
+        (result.groupby("month")["date"]
+          .transform("max")) == result["date"]]
+    except(KeyError):
+      pass
+    
+    return result
+
+permno_groups = (crsp_monthly
+  .merge(valid_permnos, how="inner", on="permno")
+  .dropna()
+  .groupby("permno", group_keys=False)
+)
+
+n_cores = cpu_count() - 1
+
+beta_monthly = (
+  pd.concat(
+    Parallel(n_jobs=n_cores)
+    (delayed(roll_capm_estimation_for_joblib)(name, group)
+    for name, group in permno_groups)
+  )
+  .dropna()
+  .rename(columns={"beta": "beta_monthly"})
+)
+```
+
+## Estimating Beta using Daily Returns
+
+```{python}
+crsp_daily = (pd.read_sql_query(
+    sql=("SELECT permno, month, date, ret_excess "
+         "FROM crsp_daily"),
+    con=tidy_finance,
+    parse_dates={"month", "date"})
+  .dropna()
+)
+```
+
+```{python}
+factors_ff3_daily = (pd.read_sql_query(
+    sql="SELECT date, mkt_excess FROM factors_ff3_daily",
+    con=tidy_finance,
+    parse_dates={"date"})
+  .dropna()
+)
+```
+
+```{python}
+window_size = 60
+min_obs = 50
+
+valid_permnos = (crsp_daily
+  .groupby("permno")["permno"]
+  .count()
+  .reset_index(name="counts")
+  .query("counts > @window_size + 1")
+  .drop(columns = "counts")
+)
+
+crsp_daily = (crsp_daily
+  .merge(factors_ff3_daily, 
+         how="inner", 
+         on="date")
+  .merge(valid_permnos, 
+         how="inner", 
+         on="permno")
+)
+```
+
+```{python}
+permno_groups = (crsp_daily
+  .merge(valid_permnos, how="inner", on="permno")
+  .dropna()
+  .groupby("permno", group_keys=False)
+)
+
+beta_daily = (
+  pd.concat(
+    Parallel(n_jobs=n_cores)
+    (delayed(roll_capm_estimation_for_joblib)(name, group)
+    for name, group in permno_groups)
+  )
+  .dropna()
+  .rename(columns={"beta": "beta_daily"})
+)
+```
+
+## Comparing Beta Estimates
+
+```{python}
+beta_industries = (beta_monthly
+  .merge(crsp_monthly, how="inner", on=["permno", "month"])
+  .dropna(subset="beta_monthly")
+  .groupby(["industry","permno"])["beta_monthly"]
+  .aggregate("mean")
+  .reset_index()
+)
+
+industry_order = (beta_industries
+  .groupby("industry")["beta_monthly"]
+  .aggregate("median").sort_values()
+  .index.tolist()
+)
+
+plot_beta_industries = (
+  ggplot(beta_industries, 
+         aes(x="industry", y="beta_monthly")) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_x_discrete(limits=industry_order) +
+  labs(x="", y="", 
+       title="Firm-specific beta distributions by industry")
+)
+plot_beta_industries.draw()
+```
+
+```{python}
+beta_quantiles = (beta_monthly
+  .groupby("month")["beta_monthly"]
+  .quantile(q=np.arange(0.1, 1.0, 0.1))
+  .reset_index()
+  .rename(columns={"level_1": "quantile"})
+  .assign(
+    quantile=lambda x: (x["quantile"] * 100).astype(int)
+  )
+  .dropna()
+)
+
+plot_beta_quantiles = (
+  ggplot(beta_quantiles, 
+         aes(x="month", y="beta_monthly", 
+             color="factor(quantile)")) +
+  geom_line() +
+  scale_x_datetime(breaks=date_breaks("10 year"), 
+                   labels=date_format("%Y")) +
+  labs(x="", y="", color="",
+       title="Monthly deciles of estimated betas")
+)
+plot_beta_quantiles.draw()
+```
+
+```{python}
+beta = (beta_monthly
+  .get(["permno", "month", "beta_monthly"])
+  .merge(beta_daily.get(["permno", "month", "beta_daily"]),
+         how="outer",
+         on=["permno", "month"])
+)
+
+beta_comparison = (beta
+  .merge(examples, on="permno")
+  .melt(id_vars=["permno", "month", "company"],
+        value_vars=["beta_monthly", "beta_daily"],
+        var_name="name", value_name="value")
+  .dropna()
+)
+
+plot_beta_comparison = (
+  ggplot(beta_comparison,
+         aes(x="month", y="value", color="name")) +
+  geom_line() +
+  facet_wrap("~company", ncol=1) +
+  scale_x_datetime(breaks=date_breaks("10 year"), 
+                   labels=date_format("%Y")) +
+  labs(x="", y="", color="",
+       title=("Comparison of beta estimates using monthly "
+              "and daily data"))
+)
+plot_beta_comparison.draw()
+```
+
+```{python}
+(beta
+  .to_sql(
+    name="beta", 
+    con=tidy_finance, 
+    if_exists="replace",
+    index=False
+  )
+)
+```
+
+```{python}
+beta_long = (crsp_monthly
+  .merge(beta, how="left", on=["permno", "month"])
+  .melt(id_vars=["permno", "month"],
+        value_vars=["beta_monthly", "beta_daily"],
+        var_name="name", value_name="value")
+  .groupby(["month", "name"])
+  .aggregate(
+    share=("value", lambda x: sum(~x.isna()) / len(x))
+  )
+  .reset_index()
+)
+
+plot_beta_long = (
+  ggplot(beta_long, 
+         aes(x="month", y="share", color="name", 
+             linetype="name")) +
+  geom_line() +
+  scale_y_continuous(labels=percent_format()) +
+  scale_x_datetime(breaks=date_breaks("10 year"), 
+                   labels=date_format("%Y")) +
+  labs(x=None, y=None, color=None, linetype=None,
+       title=("End-of-month share of securities with beta "
+              "estimates"))
+)
+plot_beta_long.draw()
+```
+
+```{python}
+beta_long.groupby("name")["share"].describe()
+```
+

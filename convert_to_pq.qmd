@@ -1,0 +1,40 @@
+# Converting data to parquet
+
+```{r}
+library(DBI)
+library(dplyr, warn.conflicts = FALSE)
+library(arrow)
+```
+
+```{r}
+tidy_finance <- dbConnect(
+  RSQLite::SQLite(),
+  "data/tidy_finance_r.sqlite",
+  extended_types = TRUE
+)
+```
+
+```{r}
+tables <- dbListTables(tidy_finance)
+```
+
+
+```{r}
+table <- tables[1]
+```
+
+```{r}
+to_parquet <- function(con, table, schema = "tidy_finance",
+                       data_dir = Sys.getenv("DATA_DIR")) {
+  df <- tbl(con, table)
+  pq_dir <- file.path(data_dir, schema = schema)
+  if (!dir.exists(pq_dir)) dir.create(pq_dir)
+  pq_file_name <- paste0(table, ".parquet")
+  pq_path <- file.path(pq_dir, pq_file_name)
+  write_parquet(collect(df), sink = pq_path)
+}
+```
+
+```{r}
+lapply(tables, \(x) to_parquet(tidy_finance, x))
+```

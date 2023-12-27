@@ -1,98 +1,109 @@
 # Beta Estimation 
 
-```{r}
-system_time <- function(x) {
-  print(system.time(x))
-  x
-}
+```{python}
+import ibis
+ibis.options.interactive = True
 ```
 
-```{r}
-#| warning: false
-library(tidyverse)
-library(DBI)
-library(scales)
-library(dbplyr)
-library(farr)
+On my computers, I store my WRDS ID in an environment variable `WRDS_ID`. 
+You could replace the following lines with `wrds_id = "your_wrds_id"`.
+ 
+```{python}
+import os
+os.environ['DATA_DIR'] = "/Users/igow/Library/CloudStorage/Dropbox/pq_data"
+data_dir = os.environ['DATA_DIR']
+data_dir
+```
+
+```{python}
+def load_parquet(con, table, schema, data_dir=os.environ['DATA_DIR']):
+  pq_file = os.path.join(data_dir, schema, table + ".parquet")
+  return con.read_parquet(pq_file)
+```
+
+Now I connect to the WRDS PostgreSQL database and establish variables representing `crsp.dsf` and `crsp.stocknames`.
+Note that these are effectively **remote** data frames, as no data is brought into memory.
+As such these lines take almost no time to run.
+
+```{python}
+db = ibis.duckdb.connect()
+
+dsf = load_parquet(db, table="dsf", schema="crsp")
+stocknames = load_parquet(db, table="stocknames", schema="crsp")
 ```
 
 ## Estimating Beta using Monthly Returns
 
-```{r}
-db <- dbConnect(duckdb::duckdb())
-crsp_monthly <- load_parquet(db, "crsp_monthly", "tidy_finance")
-crsp_daily <- load_parquet(db, "crsp_daily", "tidy_finance")
-factors_ff3_monthly <- load_parquet(db,
-                                    "factors_ff3_monthly", 
-                                    "tidy_finance") 
-factors_ff3_daily <- load_parquet(db,
-                                  "factors_ff3_daily", 
-                                  "tidy_finance") 
+```{python}
+crsp_monthly = load_parquet(db, "crsp_monthly", "tidy_finance")
+crsp_daily = load_parquet(db, "crsp_daily", "tidy_finance")
+factors_ff3_monthly = load_parquet(db,
+                                   "factors_ff3_monthly", 
+                                   "tidy_finance") 
+factors_ff3_daily = load_parquet(db,
+                                 "factors_ff3_daily", 
+                                 "tidy_finance") 
 ```
 
-```{r}
-crsp_monthly <- 
-  crsp_monthly |>
-  select(permno, month, industry, ret_excess) |>
-  left_join(
-    factors_ff3_monthly |>
-      select(month, mkt_excess), by = "month")
+```{python}
+t1 = crsp_monthly. \
+  select("permno", "month", "industry", "ret_excess")
+  
+t2 = factors_ff3_monthly. \
+      select("month", "mkt_excess")
+
+joined = t1.left_join(t2, t1.month==t2.month)
 ```
 
 
-```{r}
-fit <- lm(ret_excess ~ mkt_excess,
-  data = crsp_monthly |>
-    filter(permno == "14593")
-)
+```{python}
+from ibis import udf
 
-summary(fit)
+w = ibis.window(group_by="permno", order_by="month", preceding=60, following=0)
 ```
 
-## Rolling-window estimation
-
-```{r}
-w <- paste("OVER (PARTITION BY permno",
-           "ORDER BY month",
-           "RANGE BETWEEN INTERVAL '60 MONTHS' PRECEDING AND",
-           "CURRENT ROW)")
+```{python}
+@ibis.udf.agg.builtin
+def regr_slope(y: float, x: float) -> float:
+    ...
+    
+@ibis.udf.agg.builtin
+def regr_count(y: float, x: float) -> float:
+    ...
 ```
 
-```{r}
-beta_monthly <-
-  crsp_monthly |>
-  mutate(beta = sql(paste("regr_slope(ret_excess, mkt_excess)", w)),
-         n_rets = sql(paste("count(ret_excess)", w))) |>
-  filter(n_rets >= 48) |>
-  select(permno, month, beta) |>
-  compute() |>
-  system_time()
+```{python}
+betas_monthly_all = joined. \
+    mutate(beta = regr_slope(joined.ret_excess, joined.mkt_excess).over(w),
+           n_rets = regr_count(joined.ret_excess, joined.mkt_excess).over(w)). \
+    select("permno", "month", "beta", "n_rets")
+    
+betas_monthly = betas_monthly_all.filter([betas_monthly_all.n_rets >= 48])
 ```
 
-```{r}
-w <- paste("OVER (PARTITION BY permno",
-            "ORDER BY date",
-            "RANGE BETWEEN INTERVAL '3 MONTHS' PRECEDING AND CURRENT ROW)")
-
+```{python}
+w = ibis.window(group_by="permno", order_by="date", preceding=ibis.interval(months=3), following=0)
 ```
 
-```{r}
-beta_daily <-
-  crsp_daily |>
-  inner_join(
-    factors_ff3_daily |>
-      select(date, mkt_excess), by = "date") |>
-  select(permno, date, month, ret_excess, mkt_excess) |>
-  mutate(beta = sql(paste("regr_slope(ret_excess, mkt_excess)", w)),
-         n_rets = sql(paste("count(ret_excess)", w))) |>
-  filter(n_rets >= 50) |>
-  mutate(month = floor_date(date, "month")) |>
-  group_by(permno, month) |>
-  filter(date == max(date, na.rm = TRUE)) |>
-  ungroup() |>
-  select(permno, month, date, beta) |>
-  compute() |>
-  system_time()
+```{python}
+t1 = crsp_daily. \
+  select("permno", "date", "ret_excess")
+  
+t2 = factors_ff3_daily. \
+      select("date", "mkt_excess")
+
+joined = t1.left_join(t2, t1.date==t2.date)
+```
+
+```{python}
+betas_daily_all = joined. \
+    mutate(beta = regr_slope(joined.ret_excess, joined.mkt_excess).over(w),
+           n_rets = regr_count(joined.ret_excess, joined.mkt_excess).over(w)). \
+    select("permno", "date", "beta", "n_rets")
+```
+
+```{python}
+betas_daily = betas_daily_all.filter([betas_daily_all.n_rets >= 50])
 ```
 
 ## Comparing beta estimates
